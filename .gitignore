@@ -1,0 +1,47 @@
+# Maven & Build output
+target/
+bin/
+build/
+*.class
+sources.txt
+
+# Package archives & OS bundles
+*.zip
+*.tar.gz
+*.dmg
+*.app/
+*.exe
+/LuminaRead/
+
+# IDE & Editor settings
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# macOS metadata & caches
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Temporary files & logs
+*.log
+scratch/
+tmp/
+*.tmp
+*.bak
+auto_fix_and_run.py
+finish_and_run.py
+fix_field.py
+install_kotatsu_sidebar.py
+update_luminaread.py
+
+# LuminaRead runtime state & cache
+.luminaread/
+cache/
+logs/
