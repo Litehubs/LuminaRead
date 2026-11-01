@@ -1,5 +1,6 @@
 package com.luminaread.service;
 
+import com.luminaread.config.SettingsJsonRepository;
 import com.luminaread.model.Book;
 import com.luminaread.model.BookContent;
 import com.luminaread.model.Bookmark;
@@ -42,6 +43,7 @@ public class LibraryStorageService {
     private final Path dataDir;
     private final Path booksDir;
     private final Path stateFile;
+    private final SettingsJsonRepository settingsJsonRepository = new SettingsJsonRepository();
     private PersistentState state;
 
     private final Map<String, BookContent> parsedBookCache = new LinkedHashMap<>(10, 0.75f, true) {
@@ -77,18 +79,34 @@ public class LibraryStorageService {
                     if (this.state.settings == null) {
                         this.state.settings = new ReaderSettings();
                     }
+                    Path jsonSettingsFile = dataDir.resolve("settings.json");
+                    if (Files.exists(jsonSettingsFile)) {
+                        settingsJsonRepository.load(this.state.settings.getDisplayConfig(),
+                                this.state.settings.getOpdsConfig(), jsonSettingsFile);
+                    }
                     return;
                 }
             } catch (Exception ignored) {
             }
         }
         this.state = new PersistentState();
+        Path jsonSettingsFile = dataDir.resolve("settings.json");
+        if (Files.exists(jsonSettingsFile)) {
+            settingsJsonRepository.load(this.state.settings.getDisplayConfig(),
+                    this.state.settings.getOpdsConfig(), jsonSettingsFile);
+        }
     }
 
     public synchronized void saveState() {
         try (ObjectOutputStream oos = new ObjectOutputStream(
                 new BufferedOutputStream(new FileOutputStream(stateFile.toFile()), 32768))) {
             oos.writeObject(state);
+        } catch (Exception ignored) {
+        }
+        try {
+            Path jsonSettingsFile = dataDir.resolve("settings.json");
+            settingsJsonRepository.save(this.state.settings.getDisplayConfig(),
+                    this.state.settings.getOpdsConfig(), jsonSettingsFile);
         } catch (Exception ignored) {
         }
     }

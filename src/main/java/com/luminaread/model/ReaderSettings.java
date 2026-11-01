@@ -1,11 +1,15 @@
 package com.luminaread.model;
 
+import com.luminaread.config.OpdsCatalogConfig;
+import com.luminaread.config.ReaderDisplayConfig;
+
 import java.io.Serializable;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 public class ReaderSettings implements Serializable {
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
     public enum ReadingMode {
         PAGED("Постраничный режим"),
@@ -14,6 +18,14 @@ public class ReaderSettings implements Serializable {
         private final String displayName;
         ReadingMode(String displayName) { this.displayName = displayName; }
         public String getDisplayName() { return displayName; }
+
+        public ReaderDisplayConfig.ReadingMode toConfig() {
+            return this == SCROLL ? ReaderDisplayConfig.ReadingMode.SCROLL : ReaderDisplayConfig.ReadingMode.PAGED;
+        }
+
+        public static ReadingMode fromConfig(ReaderDisplayConfig.ReadingMode mode) {
+            return mode == ReaderDisplayConfig.ReadingMode.SCROLL ? SCROLL : PAGED;
+        }
     }
 
     public enum TextAlignment {
@@ -28,107 +40,88 @@ public class ReaderSettings implements Serializable {
         }
         public String getCssValue() { return cssValue; }
         public String getDisplayName() { return displayName; }
-    }
 
-    private String themeId = "DAY_PAPER";
-    private String fontFamily = "Georgia";
-    private int fontSize = 19;
-    private double lineHeight = 1.6;
-    private int paragraphSpacingPx = 12;
-    private int horizontalMarginPx = 64;
-    private int verticalMarginPx = 36;
-
-    private TextAlignment textAlignment = TextAlignment.LEFT;
-    private ReadingMode readingMode = ReadingMode.PAGED;
-    private boolean twoColumnSpread = false;
-    private int charsPerPage = 2400;
-
-    private double dimmerOpacity = 0.0;
-    private boolean warmEyeCareFilter = false;
-    private int autoScrollSpeed = 35;
-    private int ttsRateWpm = 175;
-    private boolean tapZonesEnabled = true;
-    private boolean showStatusBarInReader = true;
-
-    private final List<String> customOpdsCatalogs = new ArrayList<>();
-
-    public ReaderSettings() {
-        customOpdsCatalogs.add("http://flibusta.is/opds");
-        customOpdsCatalogs.add("https://www.gutenberg.org/ebooks/search.opds/");
-        customOpdsCatalogs.add("https://standardebooks.org/opds/all");
-    }
-
-    public String getThemeId() { return themeId; }
-    public void setThemeId(String themeId) { this.themeId = themeId; }
-
-    public String getFontFamily() { return fontFamily; }
-    public void setFontFamily(String fontFamily) { this.fontFamily = fontFamily; }
-
-    public int getFontSize() { return fontSize; }
-    public void setFontSize(int fontSize) { this.fontSize = Math.max(12, Math.min(42, fontSize)); }
-
-    public double getLineHeight() { return lineHeight; }
-    public void setLineHeight(double lineHeight) { this.lineHeight = Math.max(1.1, Math.min(2.4, lineHeight)); }
-
-    public int getParagraphSpacingPx() { return paragraphSpacingPx; }
-    public void setParagraphSpacingPx(int paragraphSpacingPx) {
-        this.paragraphSpacingPx = Math.max(0, Math.min(40, paragraphSpacingPx));
-    }
-
-    public int getHorizontalMarginPx() { return horizontalMarginPx; }
-    public void setHorizontalMarginPx(int horizontalMarginPx) {
-        this.horizontalMarginPx = Math.max(16, Math.min(220, horizontalMarginPx));
-    }
-
-    public int getVerticalMarginPx() { return verticalMarginPx; }
-    public void setVerticalMarginPx(int verticalMarginPx) {
-        this.verticalMarginPx = Math.max(12, Math.min(120, verticalMarginPx));
-    }
-
-    public TextAlignment getTextAlignment() { return textAlignment != null ? textAlignment : TextAlignment.LEFT; }
-    public void setTextAlignment(TextAlignment textAlignment) { this.textAlignment = textAlignment; }
-
-    public ReadingMode getReadingMode() { return readingMode; }
-    public void setReadingMode(ReadingMode readingMode) { this.readingMode = readingMode; }
-
-    public boolean isTwoColumnSpread() { return twoColumnSpread; }
-    public void setTwoColumnSpread(boolean twoColumnSpread) { this.twoColumnSpread = twoColumnSpread; }
-
-    public int getCharsPerPage() { return charsPerPage; }
-    public void setCharsPerPage(int charsPerPage) {
-        this.charsPerPage = Math.max(800, Math.min(8000, charsPerPage));
-    }
-
-    public double getDimmerOpacity() { return dimmerOpacity; }
-    public void setDimmerOpacity(double dimmerOpacity) {
-        this.dimmerOpacity = Math.max(0.0, Math.min(0.70, dimmerOpacity));
-    }
-
-    public boolean isWarmEyeCareFilter() { return warmEyeCareFilter; }
-    public void setWarmEyeCareFilter(boolean warmEyeCareFilter) { this.warmEyeCareFilter = warmEyeCareFilter; }
-
-    public int getAutoScrollSpeed() { return autoScrollSpeed; }
-    public void setAutoScrollSpeed(int autoScrollSpeed) {
-        this.autoScrollSpeed = Math.max(5, Math.min(250, autoScrollSpeed));
-    }
-
-    public int getTtsRateWpm() { return ttsRateWpm; }
-    public void setTtsRateWpm(int ttsRateWpm) {
-        this.ttsRateWpm = Math.max(90, Math.min(350, ttsRateWpm));
-    }
-
-    public boolean isTapZonesEnabled() { return tapZonesEnabled; }
-    public void setTapZonesEnabled(boolean tapZonesEnabled) { this.tapZonesEnabled = tapZonesEnabled; }
-
-    public boolean isShowStatusBarInReader() { return showStatusBarInReader; }
-    public void setShowStatusBarInReader(boolean showStatusBarInReader) {
-        this.showStatusBarInReader = showStatusBarInReader;
-    }
-
-    public List<String> getCustomOpdsCatalogs() { return customOpdsCatalogs; }
-    public void addCustomOpdsCatalog(String url) {
-        if (url != null && !url.isBlank() && !customOpdsCatalogs.contains(url.trim())) {
-            customOpdsCatalogs.add(url.trim());
+        public ReaderDisplayConfig.TextAlignment toConfig() {
+            return this == JUSTIFY ? ReaderDisplayConfig.TextAlignment.JUSTIFY : ReaderDisplayConfig.TextAlignment.LEFT;
         }
+
+        public static TextAlignment fromConfig(ReaderDisplayConfig.TextAlignment alignment) {
+            return alignment == ReaderDisplayConfig.TextAlignment.JUSTIFY ? JUSTIFY : LEFT;
+        }
+    }
+
+    private final ReaderDisplayConfig displayConfig = new ReaderDisplayConfig();
+    private final OpdsCatalogConfig opdsConfig = new OpdsCatalogConfig();
+
+    public ReaderSettings() {}
+
+    public ReaderDisplayConfig getDisplayConfig() { return displayConfig; }
+    public OpdsCatalogConfig getOpdsConfig() { return opdsConfig; }
+
+    public String getThemeId() { return displayConfig.getThemeId(); }
+    public void setThemeId(String themeId) { displayConfig.setThemeId(themeId); }
+
+    public String getFontFamily() { return displayConfig.getFontFamily(); }
+    public void setFontFamily(String fontFamily) { displayConfig.setFontFamily(fontFamily); }
+
+    public int getFontSize() { return displayConfig.getFontSize(); }
+    public void setFontSize(int fontSize) { displayConfig.setFontSize(fontSize); }
+
+    public double getLineHeight() { return displayConfig.getLineHeight(); }
+    public void setLineHeight(double lineHeight) { displayConfig.setLineHeight(lineHeight); }
+
+    public int getParagraphSpacingPx() { return displayConfig.getParagraphSpacingPx(); }
+    public void setParagraphSpacingPx(int paragraphSpacingPx) { displayConfig.setParagraphSpacingPx(paragraphSpacingPx); }
+
+    public int getHorizontalMarginPx() { return displayConfig.getHorizontalMarginPx(); }
+    public void setHorizontalMarginPx(int horizontalMarginPx) { displayConfig.setHorizontalMarginPx(horizontalMarginPx); }
+
+    public int getVerticalMarginPx() { return displayConfig.getVerticalMarginPx(); }
+    public void setVerticalMarginPx(int verticalMarginPx) { displayConfig.setVerticalMarginPx(verticalMarginPx); }
+
+    public TextAlignment getTextAlignment() {
+        return TextAlignment.fromConfig(displayConfig.getTextAlignment());
+    }
+    public void setTextAlignment(TextAlignment textAlignment) {
+        displayConfig.setTextAlignment(Objects.requireNonNullElse(textAlignment, TextAlignment.LEFT).toConfig());
+    }
+
+    public ReadingMode getReadingMode() {
+        return ReadingMode.fromConfig(displayConfig.getReadingMode());
+    }
+    public void setReadingMode(ReadingMode readingMode) {
+        displayConfig.setReadingMode(Objects.requireNonNullElse(readingMode, ReadingMode.PAGED).toConfig());
+    }
+
+    public boolean isTwoColumnSpread() { return displayConfig.isTwoColumnSpread(); }
+    public void setTwoColumnSpread(boolean twoColumnSpread) { displayConfig.setTwoColumnSpread(twoColumnSpread); }
+
+    public int getCharsPerPage() { return displayConfig.getCharsPerPage(); }
+    public void setCharsPerPage(int charsPerPage) { displayConfig.setCharsPerPage(charsPerPage); }
+
+    public double getDimmerOpacity() { return displayConfig.getDimmerOpacity(); }
+    public void setDimmerOpacity(double dimmerOpacity) { displayConfig.setDimmerOpacity(dimmerOpacity); }
+
+    public boolean isWarmEyeCareFilter() { return displayConfig.isWarmEyeCareFilter(); }
+    public void setWarmEyeCareFilter(boolean warmEyeCareFilter) { displayConfig.setWarmEyeCareFilter(warmEyeCareFilter); }
+
+    public int getAutoScrollSpeed() { return displayConfig.getAutoScrollSpeed(); }
+    public void setAutoScrollSpeed(int autoScrollSpeed) { displayConfig.setAutoScrollSpeed(autoScrollSpeed); }
+
+    public int getTtsRateWpm() { return displayConfig.getTtsRateWpm(); }
+    public void setTtsRateWpm(int ttsRateWpm) { displayConfig.setTtsRateWpm(ttsRateWpm); }
+
+    public boolean isTapZonesEnabled() { return displayConfig.isTapZonesEnabled(); }
+    public void setTapZonesEnabled(boolean tapZonesEnabled) { displayConfig.setTapZonesEnabled(tapZonesEnabled); }
+
+    public boolean isShowStatusBarInReader() { return displayConfig.isShowStatusBarInReader(); }
+    public void setShowStatusBarInReader(boolean showStatusBarInReader) { displayConfig.setShowStatusBarInReader(showStatusBarInReader); }
+
+    public List<String> getCustomOpdsCatalogs() {
+        return opdsConfig.getCustomOpdsCatalogs();
+    }
+
+    public void addCustomOpdsCatalog(String url) {
+        opdsConfig.addCatalog(url);
     }
 }

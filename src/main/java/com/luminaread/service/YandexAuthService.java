@@ -58,7 +58,27 @@ public class YandexAuthService {
     private static final Path YANDEX_ACCOUNT_FILE =
             Path.of(System.getProperty("user.home"), ".luminaread", "yandex_account.json");
 
-    public static final String YANDEX_OAUTH_CLIENT_ID = "23cabb9fd67047f39b6dcdc467bb4b44";
+    private static final String DEFAULT_YANDEX_CLIENT_ID = "23cabb9fd67047f39b6dcdc467bb4b44";
+    public static final String YANDEX_OAUTH_CLIENT_ID = resolveClientId();
+
+    private static String resolveClientId() {
+        String sysProp = System.getProperty("yandex.client.id");
+        if (sysProp != null && !sysProp.isBlank()) return sysProp.trim();
+        String env = System.getenv("YANDEX_CLIENT_ID");
+        if (env != null && !env.isBlank()) return env.trim();
+        java.nio.file.Path cfgPath = java.nio.file.Path.of(System.getProperty("user.home"), ".luminaread", "auth.properties");
+        if (java.nio.file.Files.exists(cfgPath)) {
+            try {
+                java.util.Properties props = new java.util.Properties();
+                try (java.io.InputStream is = java.nio.file.Files.newInputStream(cfgPath)) {
+                    props.load(is);
+                }
+                String val = props.getProperty("yandex.client.id");
+                if (val != null && !val.isBlank()) return val.trim();
+            } catch (Exception ignored) {}
+        }
+        return DEFAULT_YANDEX_CLIENT_ID;
+    }
 
     private static final YandexAuthService INSTANCE = new YandexAuthService();
     public static YandexAuthService getInstance() { return INSTANCE; }
