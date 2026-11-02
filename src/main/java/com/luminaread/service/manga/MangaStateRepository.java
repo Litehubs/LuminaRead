@@ -14,19 +14,21 @@ import java.util.Map;
  */
 public class MangaStateRepository {
 
-    private final Path stateFilePath;
+    private final Path explicitPath;
 
     public MangaStateRepository() {
-        this(Path.of(System.getProperty("user.home"), ".luminaread", "manga_state.json"));
+        this(null);
     }
 
-    public MangaStateRepository(Path stateFilePath) {
-        this.stateFilePath = stateFilePath != null ? stateFilePath
-                : Path.of(System.getProperty("user.home"), ".luminaread", "manga_state.json");
+    public MangaStateRepository(Path explicitPath) {
+        this.explicitPath = explicitPath;
     }
 
     public Path getStateFilePath() {
-        return stateFilePath;
+        if (explicitPath != null) {
+            return explicitPath;
+        }
+        return Path.of(System.getProperty("user.home"), ".luminaread", "manga_state.json");
     }
 
     public synchronized void saveState(Map<String, MangaItem> favorites,
@@ -34,8 +36,9 @@ public class MangaStateRepository {
                                       Map<String, String> lastReadChapterMap,
                                       Map<String, String> readerPrefs) {
         try {
-            if (stateFilePath.getParent() != null) {
-                Files.createDirectories(stateFilePath.getParent());
+            Path path = getStateFilePath();
+            if (path.getParent() != null) {
+                Files.createDirectories(path.getParent());
             }
             StringBuilder sb = new StringBuilder();
             sb.append("{\n");
@@ -85,7 +88,7 @@ public class MangaStateRepository {
             }
 
             sb.append("}");
-            Files.writeString(stateFilePath, sb.toString(), StandardCharsets.UTF_8);
+            Files.writeString(path, sb.toString(), StandardCharsets.UTF_8);
         } catch (Exception ignored) {}
     }
 
@@ -94,8 +97,9 @@ public class MangaStateRepository {
                                       Map<String, String> lastReadChapterMap,
                                       Map<String, String> readerPrefs) {
         try {
-            if (!Files.exists(stateFilePath)) return;
-            String text = Files.readString(stateFilePath, StandardCharsets.UTF_8);
+            Path path = getStateFilePath();
+            if (!Files.exists(path)) return;
+            String text = Files.readString(path, StandardCharsets.UTF_8);
             Object root = Json.parse(text);
             if (!(root instanceof Map)) return;
             Map<?, ?> map = (Map<?, ?>) root;
