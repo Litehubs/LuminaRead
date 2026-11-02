@@ -2,32 +2,19 @@ package com.luminaread.service;
 
 import com.luminaread.model.DownloadTask;
 import com.luminaread.model.OnlineBookItem;
-import com.luminaread.util.CharsetDetector;
-import com.luminaread.util.HtmlSanitizer;
+import com.luminaread.service.catalog.BookDownloader;
+import com.luminaread.service.catalog.IBookDownloader;
+import com.luminaread.service.catalog.OpdsFeedParser;
 
 import javax.swing.SwingUtilities;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
-import org.xml.sax.InputSource;
-
-import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.io.StringReader;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.zip.GZIPInputStream;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -39,6 +26,11 @@ import java.util.function.DoubleConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Online catalog service coordinating book search across OPDS and JSON providers,
+ * managing download task state and UI notification listeners, and delegating
+ * feed parsing to {@link OpdsFeedParser} and file downloading to {@link IBookDownloader}.
+ */
 public class OnlineCatalogService implements IOnlineCatalogService {
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) LuminaRead/2.2";
@@ -50,35 +42,57 @@ public class OnlineCatalogService implements IOnlineCatalogService {
             "\"authors\":\\s*\\[\\s*\\{[^}]*\"name\":\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
     private static final Pattern GUTENDEX_LANG_PATTERN = Pattern.compile(
             "\"languages\":\\s*\\[\\s*\"([a-zA-Z\\-]+)\"");
-    private static final Pattern ARCHIVE_FILE_NAME_PATTERN = Pattern.compile(
-            "\"name\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
 
     private final HttpClient httpClient;
+    private final OpdsFeedParser opdsFeedParser;
+    private final IBookDownloader bookDownloader;
     private final List<DownloadTask> downloadTasks = new CopyOnWriteArrayList<>();
     private final List<Runnable> downloadListeners = new CopyOnWriteArrayList<>();
 
     public OnlineCatalogService() {
-        this.httpClient = HttpClient.newBuilder()
+        this(new OpdsFeedParser(), null, null);
+    }
+
+    public OnlineCatalogService(OpdsFeedParser opdsFeedParser, IBookDownloader bookDownloader, HttpClient httpClient) {
+        this.httpClient = (httpClient != null) ? httpClient : HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.ALWAYS)
                 .connectTimeout(Duration.ofSeconds(12))
                 .build();
+        this.opdsFeedParser = (opdsFeedParser != null) ? opdsFeedParser : new OpdsFeedParser();
+        this.bookDownloader = (bookDownloader != null) ? bookDownloader : new BookDownloader(this.httpClient, this::notifyDownloadListeners);
     }
 
+    public OpdsFeedParser getOpdsFeedParser() {
+        return opdsFeedParser;
+    }
+
+    public IBookDownloader getBookDownloader() {
+        return bookDownloader;
+    }
+
+    // ==========================================
+    // IDownloadManager Implementation
+    // ==========================================
+
+    @Override
     public List<DownloadTask> getDownloadTasks() {
         return new ArrayList<>(downloadTasks);
     }
 
+    @Override
     public void clearCompletedTasks() {
         downloadTasks.removeIf(t -> t.getStatus() != DownloadTask.Status.DOWNLOADING);
         notifyDownloadListeners();
     }
 
+    @Override
     public void addDownloadListener(Runnable listener) {
         if (listener != null) {
             downloadListeners.add(listener);
         }
     }
 
+    @Override
     public void notifyDownloadListeners() {
         SwingUtilities.invokeLater(() -> {
             for (Runnable r : downloadListeners) {
@@ -90,6 +104,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         });
     }
 
+    @Override
     public DownloadTask createTrackedTask(String title, String formatHint, String url) {
         DownloadTask task = new DownloadTask(title, formatHint, url);
         downloadTasks.add(0, task);
@@ -97,6 +112,11 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         return task;
     }
 
+    // ==========================================
+    // ICatalogSearchService Implementation
+    // ==========================================
+
+    @Override
     public List<OnlineBookItem> searchBooks(String query, String sourceFilter, String languageFilter) {
         String cleanQuery = (query == null) ? "" : query.trim();
         List<CompletableFuture<List<OnlineBookItem>>> tasks = new ArrayList<>();
@@ -133,6 +153,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         return combined;
     }
 
+    @Override
     public List<OnlineBookItem> browseCustomOpds(String opdsUrl, String optionalSearchTerm) {
         if (opdsUrl == null || opdsUrl.isBlank()) return Collections.emptyList();
         String targetUrl = opdsUrl.trim();
@@ -146,6 +167,47 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         }
         return fetchOpdsFeed(targetUrl, "OPDS Каталог");
     }
+
+    @Override
+    public List<OnlineBookItem> fetchOpdsFeed(String feedUrl, String sourceLabel) {
+        List<OnlineBookItem> results = new ArrayList<>();
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(feedUrl))
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "application/atom+xml, application/xml, text/xml, */*")
+                    .timeout(Duration.ofSeconds(14))
+                    .GET()
+                    .build();
+
+            HttpResponse<byte[]> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() >= 200 && resp.statusCode() < 300 && resp.body() != null) {
+                return opdsFeedParser.parse(resp.body(), feedUrl, sourceLabel);
+            }
+        } catch (Exception ignored) {
+        }
+        return results;
+    }
+
+    // ==========================================
+    // IBookDownloader Implementation
+    // ==========================================
+
+    @Override
+    public File downloadBookFile(String downloadUrl, String suggestedTitle, String formatHint,
+                                 Path destinationDir, DoubleConsumer progressCallback) throws Exception {
+        DownloadTask task = createTrackedTask(suggestedTitle, formatHint, downloadUrl);
+        return bookDownloader.downloadBookFileWithTask(task, destinationDir, progressCallback);
+    }
+
+    @Override
+    public File downloadBookFileWithTask(DownloadTask task, Path destinationDir, DoubleConsumer progressCallback) throws Exception {
+        return bookDownloader.downloadBookFileWithTask(task, destinationDir, progressCallback);
+    }
+
+    // ==========================================
+    // Internal Search Providers & JSON Parsers
+    // ==========================================
 
     private List<OnlineBookItem> searchFlibustaOpds(String query) {
         String[] mirrors = {
@@ -185,92 +247,6 @@ public class OnlineCatalogService implements IOnlineCatalogService {
             }
         }
         return Collections.emptyList();
-    }
-
-    public List<OnlineBookItem> fetchOpdsFeed(String feedUrl, String sourceLabel) {
-        List<OnlineBookItem> results = new ArrayList<>();
-        try {
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(feedUrl))
-                    .header("User-Agent", USER_AGENT)
-                    .header("Accept", "application/atom+xml, application/xml, text/xml, */*")
-                    .timeout(Duration.ofSeconds(14))
-                    .GET()
-                    .build();
-
-            HttpResponse<byte[]> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray());
-            if (resp.statusCode() >= 200 && resp.statusCode() < 300 && resp.body() != null) {
-                String xml = CharsetDetector.decodeBytes(resp.body());
-                int firstLt = xml.indexOf('<');
-                if (firstLt > 0) xml = xml.substring(firstLt);
-
-                xml = escapeBareAmpersands(xml);
-
-                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-                factory.setNamespaceAware(false);
-                factory.setValidating(false);
-                try {
-                    factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-                } catch (Exception ignored) {
-                }
-                DocumentBuilder builder = factory.newDocumentBuilder();
-                Document doc = builder.parse(new InputSource(new StringReader(xml)));
-
-                URI baseUri = URI.create(feedUrl);
-                NodeList entries = doc.getElementsByTagName("entry");
-                for (int i = 0; i < entries.getLength(); i++) {
-                    if (!(entries.item(i) instanceof Element entry)) continue;
-                    String title = getChildText(entry, "title");
-                    String author = getAuthorName(entry);
-                    String summary = HtmlSanitizer.htmlToPlainText(getChildText(entry, "content"));
-                    if (summary.isBlank()) {
-                        summary = HtmlSanitizer.htmlToPlainText(getChildText(entry, "summary"));
-                    }
-                    String lang = getChildText(entry, "dc:language");
-                    if (lang.isBlank()) lang = getChildText(entry, "dcterms:language");
-                    if (lang.isBlank()) lang = getChildText(entry, "language");
-                    if (lang.isBlank()) lang = "ru";
-
-                    lang = lang.trim().toLowerCase(Locale.ROOT);
-                    if (lang.length() > 2) {
-                        int cut = lang.indexOf('-');
-                        if (cut < 0) cut = lang.indexOf('_');
-                        if (cut > 0) lang = lang.substring(0, cut);
-                    }
-
-                    OnlineBookItem bookItem = new OnlineBookItem(title, author, summary, lang, sourceLabel);
-
-                    NodeList links = entry.getElementsByTagName("link");
-                    for (int l = 0; l < links.getLength(); l++) {
-                        if (!(links.item(l) instanceof Element linkEl)) continue;
-                        String href = linkEl.getAttribute("href");
-                        String type = linkEl.getAttribute("type").toLowerCase(Locale.ROOT);
-                        String rel = linkEl.getAttribute("rel").toLowerCase(Locale.ROOT);
-                        if (href == null || href.isBlank()) continue;
-
-                        String absHref;
-                        try {
-                            absHref = baseUri.resolve(href).toString();
-                        } catch (Exception e) {
-                            absHref = href;
-                        }
-
-                        if (rel.contains("acquisition") || isBookMimeType(type) || hasBookExtension(absHref)) {
-                            String fmt = detectFormatFromMimeOrHref(type, absHref);
-                            if (fmt != null) {
-                                bookItem.addDownloadLink(fmt, absHref);
-                            }
-                        }
-                    }
-
-                    if (bookItem.hasDownloadLinks()) {
-                        results.add(bookItem);
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return results;
     }
 
     private List<OnlineBookItem> searchGutendex(String query, String langFilter) {
@@ -344,7 +320,6 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         }
         List<OnlineBookItem> results = new ArrayList<>();
         try {
-
             String iaSearchUrl = "https://archive.org/advancedsearch.php?q=("
                     + encodeUrl(query)
                     + ")+AND+mediatype:texts+AND+NOT+collection:inlibrary+AND+NOT+collection:printdisabled"
@@ -444,326 +419,6 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         }
     }
 
-    private String resolveBestArchiveOrgUrl(String originalUrl, String formatHint) {
-        if (originalUrl == null || !originalUrl.contains("archive.org/download/")) {
-            return originalUrl;
-        }
-        try {
-            String afterDownload = originalUrl.substring(originalUrl.indexOf("archive.org/download/") + "archive.org/download/".length());
-            int slash = afterDownload.indexOf('/');
-            if (slash <= 0) return originalUrl;
-            String iaId = afterDownload.substring(0, slash);
-
-            String metaUrl = "https://archive.org/metadata/" + iaId + "/files";
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(metaUrl))
-                    .header("User-Agent", USER_AGENT)
-                    .timeout(Duration.ofSeconds(10))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (resp.statusCode() != 200 || resp.body() == null) {
-                return originalUrl;
-            }
-
-            List<String> fileNames = new ArrayList<>();
-            Matcher m = ARCHIVE_FILE_NAME_PATTERN.matcher(resp.body());
-            while (m.find()) {
-                String fn = unescapeJson(m.group(1));
-                if (!fn.isBlank()) fileNames.add(fn);
-            }
-
-            String targetExt = ".epub";
-            if (formatHint != null) {
-                String h = formatHint.toUpperCase(Locale.ROOT);
-                if (h.contains("PDF")) targetExt = ".pdf";
-                else if (h.contains("FB2")) targetExt = ".fb2";
-                else if (h.contains("TXT")) targetExt = ".txt";
-            }
-
-            for (String fn : fileNames) {
-                String lower = fn.toLowerCase(Locale.ROOT);
-                if (lower.endsWith(targetExt) && !lower.contains("encrypted")) {
-                    return buildArchiveDownloadUrl(iaId, fn);
-                }
-            }
-
-            String[] fallbackExts = {".fb2.zip", ".fb2", ".epub", ".pdf", "_djvu.txt", ".txt"};
-            for (String ext : fallbackExts) {
-                for (String fn : fileNames) {
-                    String lower = fn.toLowerCase(Locale.ROOT);
-                    if (lower.endsWith(ext) && !lower.contains("encrypted")) {
-                        return buildArchiveDownloadUrl(iaId, fn);
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return originalUrl;
-    }
-
-    private String buildArchiveDownloadUrl(String iaId, String fileName) {
-        String encodedFile = URLEncoder.encode(fileName, StandardCharsets.UTF_8)
-                .replace("+", "%20")
-                .replace("%2F", "/");
-        return "https://archive.org/download/" + iaId + "/" + encodedFile;
-    }
-
-    public File downloadBookFile(String downloadUrl, String suggestedTitle, String formatHint,
-                                 Path destinationDir, DoubleConsumer progressCallback) throws Exception {
-        DownloadTask task = createTrackedTask(suggestedTitle, formatHint, downloadUrl);
-        return downloadBookFileWithTask(task, destinationDir, progressCallback);
-    }
-
-    public File downloadBookFileWithTask(DownloadTask task, Path destinationDir, DoubleConsumer progressCallback) throws Exception {
-        long startTimeMs = System.currentTimeMillis();
-        try {
-            String effectiveUrl = resolveBestArchiveOrgUrl(task.getUrl(), task.getFormat());
-
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(effectiveUrl))
-                    .header("User-Agent", USER_AGENT)
-                    .timeout(Duration.ofSeconds(45))
-                    .GET()
-                    .build();
-
-            HttpResponse<InputStream> response = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalStateException("Сервер вернул код ответа HTTP " + response.statusCode()
-                        + " (возможно, книга защищена авторским правом или недоступна для свободного скачивания).");
-            }
-
-            String contentType = response.headers().firstValue("Content-Type").orElse("");
-            String finalUriStr = response.uri().toString().toLowerCase(Locale.ROOT);
-
-            if (finalUriStr.contains("/account/login") || finalUriStr.contains("borrow")) {
-                throw new IllegalStateException("Эта книга в каталоге Open Library доступна только по читательскому билету (режим Borrow). Выберите другое издание или каталог (например, Flibusta OPDS или Gutenberg).");
-            }
-
-            long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
-            task.setTotalBytes(contentLength);
-
-            String ext = determineExtension(effectiveUrl, task.getFormat(), contentType,
-                    response.headers().firstValue("Content-Disposition").orElse(""));
-
-            String safeBaseName = task.getTitle().replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-            if (safeBaseName.length() > 80) {
-                safeBaseName = safeBaseName.substring(0, 80).trim();
-            }
-
-            File outFile = destinationDir.resolve(safeBaseName + ext).toFile();
-            long lastNotifyMs = 0L;
-
-            try (InputStream in = response.body();
-                 BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile), 65536)) {
-                byte[] buffer = new byte[32768];
-                long totalRead = 0;
-                int read;
-                while ((read = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, read);
-                    totalRead += read;
-                    task.setBytesDownloaded(totalRead);
-
-                    long now = System.currentTimeMillis();
-                    double elapsedSec = Math.max(0.1, (now - startTimeMs) / 1000.0);
-                    task.setSpeedKbps((totalRead / 1024.0) / elapsedSec);
-
-                    if (contentLength > 0) {
-                        double ratio = Math.min(1.0, (double) totalRead / contentLength);
-                        task.setProgressPercent((int) Math.round(ratio * 100));
-                        if (progressCallback != null) {
-                            progressCallback.accept(ratio);
-                        }
-                    } else {
-                        int estimatedPct = (int) Math.min(95, (totalRead / 15360));
-                        task.setProgressPercent(Math.max(5, estimatedPct));
-                        if (progressCallback != null) {
-                            progressCallback.accept(task.getProgressPercent() / 100.0);
-                        }
-                    }
-
-                    if (now - lastNotifyMs > 80) {
-                        lastNotifyMs = now;
-                        notifyDownloadListeners();
-                    }
-                }
-            }
-
-            outFile = decompressGzipIfNeeded(outFile);
-
-            validateDownloadedBookFile(outFile, task.getFormat());
-
-            task.setProgressPercent(100);
-            task.setStatus(DownloadTask.Status.COMPLETED);
-            task.setSavedFile(outFile);
-            if (progressCallback != null) {
-                progressCallback.accept(1.0);
-            }
-            notifyDownloadListeners();
-            return outFile;
-        } catch (Exception ex) {
-            task.setStatus(DownloadTask.Status.FAILED);
-            task.setErrorMessage(ex.getMessage());
-            notifyDownloadListeners();
-            throw ex;
-        }
-    }
-
-    private File decompressGzipIfNeeded(File file) throws Exception {
-        if (file == null || !file.exists() || file.length() < 2) {
-            return file;
-        }
-        int b0;
-        int b1;
-        try (InputStream is = new FileInputStream(file)) {
-            b0 = is.read();
-            b1 = is.read();
-        }
-        if (b0 != 0x1F || b1 != 0x8B) {
-            return file;
-        }
-        File tmp = new File(file.getParentFile(), file.getName() + ".gunzip.tmp");
-        try (InputStream raw = new FileInputStream(file);
-             GZIPInputStream gis = new GZIPInputStream(raw);
-             FileOutputStream fos = new FileOutputStream(tmp)) {
-            byte[] buf = new byte[65536];
-            int r;
-            while ((r = gis.read(buf)) > 0) {
-                fos.write(buf, 0, r);
-            }
-        }
-        Path target = file.toPath();
-        Files.deleteIfExists(target);
-        Files.move(tmp.toPath(), target);
-        return file;
-    }
-
-    private void validateDownloadedBookFile(File file, String requestedFormat) throws Exception {
-        if (file == null || !file.exists() || file.length() < 64) {
-            if (file != null) Files.deleteIfExists(file.toPath());
-            throw new IllegalStateException("Скачанный файл пуст (0 КБ). Попробуйте другой формат или источник.");
-        }
-
-        byte[] header = new byte[(int) Math.min(1024, file.length())];
-        try (InputStream is = new FileInputStream(file)) {
-            int r = is.read(header);
-            if (r > 0) {
-                String headText = new String(header, 0, r, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
-                boolean looksLikeHtml = headText.contains("<!doctype html") || headText.contains("<html");
-                boolean requestedHtml = requestedFormat != null && requestedFormat.toUpperCase(Locale.ROOT).contains("HTML");
-                if (looksLikeHtml && !requestedHtml) {
-                    if (headText.contains("archive.org") || headText.contains("login") || headText.contains("borrow")
-                            || headText.contains("404") || headText.contains("cloudflare")) {
-                        Files.deleteIfExists(file.toPath());
-                        throw new IllegalStateException("Это издание защищено от прямого скачивания на сайте источника (требуется вход/аренда). Выберите другое издание в списке или формат PDF/TXT.");
-                    }
-                }
-            }
-        }
-    }
-
-    private String determineExtension(String url, String formatHint, String contentType, String disposition) {
-        String lowerDisp = disposition.toLowerCase(Locale.ROOT);
-        if (lowerDisp.contains(".fb2.zip")) return ".fb2.zip";
-        if (lowerDisp.contains(".fb2")) return ".fb2";
-        if (lowerDisp.contains(".epub")) return ".epub";
-        if (lowerDisp.contains(".pdf")) return ".pdf";
-
-        String lowerUrl = url.toLowerCase(Locale.ROOT);
-        if (lowerUrl.contains(".fb2.zip") || lowerUrl.endsWith("/fb2")) return ".fb2.zip";
-        if (lowerUrl.endsWith(".fb2")) return ".fb2";
-        if (lowerUrl.contains(".epub") || lowerUrl.endsWith("/epub")) return ".epub";
-        if (lowerUrl.endsWith(".pdf")) return ".pdf";
-        if (lowerUrl.endsWith(".cbz")) return ".cbz";
-        if (lowerUrl.endsWith(".md")) return ".md";
-        if (lowerUrl.endsWith(".txt")) return ".txt";
-        if (lowerUrl.contains(".html")) return ".html";
-
-        if (formatHint != null) {
-            String h = formatHint.toUpperCase(Locale.ROOT);
-            if (h.contains("FB2.ZIP")) return ".fb2.zip";
-            if (h.contains("FB2")) return ".fb2";
-            if (h.contains("EPUB")) return ".epub";
-            if (h.contains("PDF")) return ".pdf";
-            if (h.contains("CBZ")) return ".cbz";
-            if (h.contains("HTML")) return ".html";
-            if (h.contains("MD")) return ".md";
-            if (h.contains("TXT")) return ".txt";
-        }
-
-        String lowerCt = contentType.toLowerCase(Locale.ROOT);
-        if (lowerCt.contains("epub")) return ".epub";
-        if (lowerCt.contains("fb2")) return ".fb2";
-        if (lowerCt.contains("pdf")) return ".pdf";
-        if (lowerCt.contains("html")) return ".html";
-        return ".txt";
-    }
-
-    private static String escapeBareAmpersands(String xml) {
-        StringBuilder sb = new StringBuilder(xml.length() + 64);
-        for (int i = 0; i < xml.length(); i++) {
-            char c = xml.charAt(i);
-            if (c == '&') {
-                int semi = xml.indexOf(';', i + 1);
-                boolean isEntity = false;
-                if (semi > i + 1 && semi - i <= 12) {
-                    String body = xml.substring(i + 1, semi);
-                    if (body.matches("#[0-9]+") || body.matches("#[xX][0-9a-fA-F]+")
-                            || body.matches("[a-zA-Z][a-zA-Z0-9]*")) {
-                        isEntity = true;
-                    }
-                }
-                sb.append(isEntity ? "&" : "&amp;");
-            } else if (c < 0x20 && c != '\n' && c != '\r' && c != '\t') {
-
-                sb.append(' ');
-            } else {
-                sb.append(c);
-            }
-        }
-        return sb.toString();
-    }
-
-    private boolean isBookMimeType(String type) {
-        return type.contains("epub") || type.contains("fb2") || type.contains("pdf")
-                || type.contains("text/plain") || type.contains("zip") || type.contains("mobi");
-    }
-
-    private boolean hasBookExtension(String href) {
-        String l = href.toLowerCase(Locale.ROOT);
-        return l.endsWith(".epub") || l.endsWith(".fb2") || l.endsWith(".fb2.zip")
-                || l.endsWith(".pdf") || l.endsWith(".txt") || l.endsWith("/fb2") || l.endsWith("/epub");
-    }
-
-    private String detectFormatFromMimeOrHref(String mime, String href) {
-        String lHref = href.toLowerCase(Locale.ROOT);
-        if (mime.contains("fb2+zip") || lHref.endsWith(".fb2.zip") || lHref.endsWith("/fb2")) return "FB2.ZIP";
-        if (mime.contains("fb2") || lHref.endsWith(".fb2")) return "FB2";
-        if (mime.contains("epub") || lHref.endsWith(".epub") || lHref.endsWith("/epub")) return "EPUB";
-        if (mime.contains("pdf") || lHref.endsWith(".pdf")) return "PDF";
-        if (mime.contains("text/plain") || lHref.endsWith(".txt")) return "TXT";
-        if (mime.contains("html") || lHref.endsWith(".html")) return "HTML";
-        return null;
-    }
-
-    private String getChildText(Element parent, String tag) {
-        NodeList list = parent.getElementsByTagName(tag);
-        if (list.getLength() > 0) {
-            return list.item(0).getTextContent().replaceAll("\\s+", " ").trim();
-        }
-        return "";
-    }
-
-    private String getAuthorName(Element entry) {
-        NodeList authors = entry.getElementsByTagName("author");
-        if (authors.getLength() > 0 && authors.item(0) instanceof Element aEl) {
-            String name = getChildText(aEl, "name");
-            if (!name.isBlank()) return name;
-        }
-        return "Неизвестный автор";
-    }
-
     private String extractJsonString(String obj, String key) {
         Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").matcher(obj);
         return m.find() ? unescapeJson(m.group(1)) : "";
@@ -779,7 +434,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         return m.find() ? m.group(1) : "";
     }
 
-    private String unescapeJson(String s) {
+    private static String unescapeJson(String s) {
         if (s == null) return "";
         StringBuilder sb = new StringBuilder(s.length());
         for (int i = 0; i < s.length(); i++) {
@@ -811,7 +466,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         return sb.toString().trim();
     }
 
-    private String encodeUrl(String s) {
+    private static String encodeUrl(String s) {
         return URLEncoder.encode(s, StandardCharsets.UTF_8);
     }
 }
