@@ -2,6 +2,8 @@ package com.luminaread.ui;
 
 import com.luminaread.model.Book;
 import com.luminaread.service.DictionaryService;
+import com.luminaread.service.IDictionaryService;
+import com.luminaread.service.ITtsService;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
 import com.luminaread.service.TtsService;
@@ -67,6 +69,13 @@ public class MainWindow extends JFrame {
                       OnlineCatalogService catalogService,
                       TtsService ttsService,
                       DictionaryService dictionaryService) {
+        this(storageService, catalogService, (ITtsService) ttsService, (IDictionaryService) dictionaryService);
+    }
+
+    public MainWindow(LibraryStorageService storageService,
+                      OnlineCatalogService catalogService,
+                      ITtsService ttsService,
+                      IDictionaryService dictionaryService) {
         super("LuminaRead — Минималистичная читалка и онлайн-каталог книг");
         this.storageService = storageService;
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());

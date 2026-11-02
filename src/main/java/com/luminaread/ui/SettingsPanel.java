@@ -5,6 +5,7 @@ import com.luminaread.model.DownloadTask;
 import com.luminaread.model.ReaderSettings;
 import com.luminaread.service.LibAccountService;
 import com.luminaread.service.LibAccountService.LibUser;
+import com.luminaread.service.ITtsService;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
 import com.luminaread.service.TtsService;
@@ -42,7 +43,7 @@ import java.util.stream.Stream;
 public class SettingsPanel extends JPanel {
     private final LibraryStorageService storageService;
     private final OnlineCatalogService catalogService;
-    private final TtsService ttsService;
+    private final ITtsService ttsService;
     private final Consumer<ThemePalette> onThemeChangedGlobal;
     private final Runnable onSettingsUpdated;
     private final Consumer<Book> onOpenDownloadedBook;
@@ -59,6 +60,15 @@ public class SettingsPanel extends JPanel {
     public SettingsPanel(LibraryStorageService storageService,
                          OnlineCatalogService catalogService,
                          TtsService ttsService,
+                         Consumer<ThemePalette> onThemeChangedGlobal,
+                         Runnable onSettingsUpdated,
+                         Consumer<Book> onOpenDownloadedBook) {
+        this(storageService, catalogService, (ITtsService) ttsService, onThemeChangedGlobal, onSettingsUpdated, onOpenDownloadedBook);
+    }
+
+    public SettingsPanel(LibraryStorageService storageService,
+                         OnlineCatalogService catalogService,
+                         ITtsService ttsService,
                          Consumer<ThemePalette> onThemeChangedGlobal,
                          Runnable onSettingsUpdated,
                          Consumer<Book> onOpenDownloadedBook) {

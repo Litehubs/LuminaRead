@@ -25,7 +25,7 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-public class Fb2Parser {
+public class Fb2Parser implements BookParser {
 
     private static final Pattern BINARY_PATTERN = Pattern.compile(
             "<binary\\b([^>]*)>(.*?)</binary>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
@@ -41,10 +41,33 @@ public class Fb2Parser {
             "p", "h3", "h4", "em", "strong", "b", "i", "s", "br",
             "img", "div", "code", "sub", "sup", "blockquote");
 
+    @Override
+    public boolean supports(File file, String formatHint) {
+        if (formatHint != null) {
+            String upper = formatHint.toUpperCase(Locale.ROOT);
+            if (upper.equals("FB2") || upper.equals("FB2.ZIP") || upper.equals("FBZ")) {
+                return true;
+            }
+        }
+        if (file != null) {
+            String name = file.getName().toLowerCase(Locale.ROOT);
+            if (name.endsWith(".fb2") || name.endsWith(".fb2.zip") || name.endsWith(".fbz")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public String getSupportedFormat() {
+        return "FB2";
+    }
+
     public BookContent parse(Book book) throws Exception {
         return parse(new File(book.getFilePath()));
     }
 
+    @Override
     public BookContent parse(File file) throws Exception {
         if (file == null || !file.exists()) {
             throw new FileNotFoundException("Файл книги не найден: "

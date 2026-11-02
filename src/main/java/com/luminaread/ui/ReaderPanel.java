@@ -8,6 +8,8 @@ import com.luminaread.model.Highlight;
 import com.luminaread.model.ReaderSettings;
 import com.luminaread.parser.PaginationEngine;
 import com.luminaread.service.DictionaryService;
+import com.luminaread.service.IDictionaryService;
+import com.luminaread.service.ITtsService;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.TtsService;
 import com.luminaread.util.HtmlSanitizer;
@@ -63,8 +65,8 @@ public class ReaderPanel extends JPanel {
     private static final DateTimeFormatter CLOCK_FMT = DateTimeFormatter.ofPattern("HH:mm");
 
     private final LibraryStorageService storageService;
-    private final TtsService ttsService;
-    private final DictionaryService dictionaryService;
+    private final ITtsService ttsService;
+    private final IDictionaryService dictionaryService;
     private final Runnable onBackToLibrary;
     private final ConsumerThemeCallback onThemeChangedGlobal;
 
@@ -117,6 +119,14 @@ public class ReaderPanel extends JPanel {
     public ReaderPanel(LibraryStorageService storageService,
                        TtsService ttsService,
                        DictionaryService dictionaryService,
+                       Runnable onBackToLibrary,
+                       ConsumerThemeCallback onThemeChangedGlobal) {
+        this(storageService, (ITtsService) ttsService, (IDictionaryService) dictionaryService, onBackToLibrary, onThemeChangedGlobal);
+    }
+
+    public ReaderPanel(LibraryStorageService storageService,
+                       ITtsService ttsService,
+                       IDictionaryService dictionaryService,
                        Runnable onBackToLibrary,
                        ConsumerThemeCallback onThemeChangedGlobal) {
         this.storageService = storageService;

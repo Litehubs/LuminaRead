@@ -44,6 +44,22 @@ public class EpubParser implements BookParser {
             Pattern.compile("<h[1-4][^>]*>(.*?)</h[1-4]>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     @Override
+    public boolean supports(File file, String formatHint) {
+        if (formatHint != null && "EPUB".equalsIgnoreCase(formatHint)) {
+            return true;
+        }
+        if (file != null && file.getName().toLowerCase(Locale.ROOT).endsWith(".epub")) {
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public String getSupportedFormat() {
+        return "EPUB";
+    }
+
+    @Override
     public BookContent parse(File file) throws Exception {
         Map<String, byte[]> zipEntries = readZipEntriesRobust(file);
 

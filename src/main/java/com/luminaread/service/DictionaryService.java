@@ -11,7 +11,7 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class DictionaryService {
+public class DictionaryService implements IDictionaryService {
     private static final Pattern TRANSLATED_TEXT_PATTERN =
             Pattern.compile("\"translatedText\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
     private static final Pattern DEFINITION_PATTERN =
@@ -26,6 +26,7 @@ public class DictionaryService {
                 .build();
     }
 
+    @Override
     public String lookupAndTranslate(String selectedText) {
         if (selectedText == null || selectedText.isBlank()) {
             return "Выделите слово или фразу в тексте книги для перевода и поиска значения.";

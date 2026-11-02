@@ -27,6 +27,22 @@ public class PdfParser implements BookParser {
     private static final long MAX_EXTRACTED_TEXT_BYTES = 128L * 1024 * 1024;
 
     @Override
+    public boolean supports(File file, String formatHint) {
+        if (formatHint != null && "PDF".equalsIgnoreCase(formatHint)) {
+            return true;
+        }
+        if (file != null && file.getName().toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public String getSupportedFormat() {
+        return "PDF";
+    }
+
+    @Override
     public BookContent parse(File file) throws Exception {
         if (file == null || !file.isFile() || !file.canRead()) {
             throw new IllegalArgumentException("PDF-файл не найден или недоступен для чтения.");

@@ -18,6 +18,22 @@ import java.util.zip.ZipInputStream;
 public class CbzParser implements BookParser {
 
     @Override
+    public boolean supports(File file, String formatHint) {
+        if (formatHint != null && "CBZ".equalsIgnoreCase(formatHint)) {
+            return true;
+        }
+        if (file != null && file.getName().toLowerCase(Locale.ROOT).endsWith(".cbz")) {
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public String getSupportedFormat() {
+        return "CBZ";
+    }
+
+    @Override
     public BookContent parse(File file) throws Exception {
         BookContent content = new BookContent();
         String baseTitle = file.getName();

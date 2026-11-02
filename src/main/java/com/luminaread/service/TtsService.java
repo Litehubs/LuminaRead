@@ -1,80 +1,96 @@
 package com.luminaread.service;
 
-import java.util.List;
+import com.luminaread.service.tts.LinuxTtsEngine;
+import com.luminaread.service.tts.MacTtsEngine;
+import com.luminaread.service.tts.TtsEngine;
+import com.luminaread.service.tts.WindowsTtsEngine;
+
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Timer;
 import java.util.TimerTask;
 
-public class TtsService {
+/**
+ * Text-to-speech service managing audio synthesis processes, speech state, and sleep timers.
+ * Delegates platform-specific synthesis process creation to {@link TtsEngine} strategies.
+ */
+public class TtsService implements ITtsService {
+    private final TtsEngine engine;
     private Process activeProcess;
     private volatile boolean speaking = false;
     private Timer sleepTimer;
     private Runnable onStopCallback;
 
-    public static boolean isCommandAvailable(String cmd) {
-        try {
-            Process p = new ProcessBuilder("which", cmd).redirectErrorStream(true).start();
-            return p.waitFor() == 0;
-        } catch (Exception e) {
-            return false;
+    /**
+     * Constructs a TTS service using the default engine detected for current host OS.
+     */
+    public TtsService() {
+        this(resolveEngineForOs(System.getProperty("os.name", "")));
+    }
+
+    /**
+     * Constructs a TTS service with an explicit {@link TtsEngine} strategy.
+     *
+     * @param engine the TTS engine strategy to use
+     */
+    public TtsService(TtsEngine engine) {
+        this.engine = Objects.requireNonNull(engine, "TtsEngine must not be null");
+    }
+
+    /**
+     * Returns the active TTS engine strategy.
+     */
+    public TtsEngine getEngine() {
+        return engine;
+    }
+
+    /**
+     * Resolves the appropriate {@link TtsEngine} strategy for the given operating system name.
+     */
+    public static TtsEngine resolveEngineForOs(String os) {
+        String lowerOs = os == null ? "" : os.toLowerCase(Locale.ROOT);
+        if (lowerOs.contains("mac")) {
+            return new MacTtsEngine();
+        } else if (lowerOs.contains("win")) {
+            return new WindowsTtsEngine();
+        } else {
+            return new LinuxTtsEngine();
         }
+    }
+
+    public static boolean isCommandAvailable(String cmd) {
+        return LinuxTtsEngine.isCommandAvailable(cmd);
     }
 
     public static String escapeForPowerShell(String text) {
-        if (text == null) return "";
-        // In PowerShell single-quoted strings, single quote is escaped by doubling it (' -> '')
-        return text.replace("'", "''").replaceAll("[\\r\\n]+", " ").trim();
+        return WindowsTtsEngine.escapeForPowerShell(text);
     }
 
     public static ProcessBuilder buildWindowsProcess(String textToSpeak, int rateWpm) {
-        int winRate = Math.max(-5, Math.min(5, (rateWpm - 175) / 25));
-        String escapedText = escapeForPowerShell(textToSpeak);
-        String psCmd = "Add-Type -AssemblyName System.Speech; "
-                + "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                + "$s.Rate = " + winRate + "; "
-                + "$s.Speak('" + escapedText + "');";
-        return new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", psCmd);
+        return new WindowsTtsEngine().buildProcess(textToSpeak, rateWpm);
     }
 
     public static ProcessBuilder buildLinuxProcess(String textToSpeak, int rateWpm, boolean forceSpdSay) {
-        if (forceSpdSay) {
-            int spdRate = Math.max(-100, Math.min(100, (rateWpm - 175) * 100 / 175));
-            return new ProcessBuilder("spd-say", "-r", String.valueOf(spdRate), textToSpeak);
-        } else {
-            return new ProcessBuilder("espeak", "-s", String.valueOf(rateWpm), textToSpeak);
-        }
+        return new LinuxTtsEngine().buildProcess(textToSpeak, rateWpm, forceSpdSay);
     }
 
     public static ProcessBuilder buildLinuxProcess(String textToSpeak, int rateWpm) {
-        if (isCommandAvailable("espeak")) {
-            return buildLinuxProcess(textToSpeak, rateWpm, false);
-        } else if (isCommandAvailable("spd-say")) {
-            return buildLinuxProcess(textToSpeak, rateWpm, true);
-        } else {
-            // Default fallback if neither command is detected in PATH
-            return buildLinuxProcess(textToSpeak, rateWpm, false);
-        }
+        return new LinuxTtsEngine().buildProcess(textToSpeak, rateWpm);
     }
 
     public static ProcessBuilder buildMacProcess(String textToSpeak, int rateWpm) {
-        return new ProcessBuilder("say", "-r", String.valueOf(rateWpm), textToSpeak);
+        return new MacTtsEngine().buildProcess(textToSpeak, rateWpm);
     }
 
     public static ProcessBuilder createProcessBuilder(String os, String textToSpeak, int rateWpm) {
-        String lowerOs = os == null ? "" : os.toLowerCase(Locale.ROOT);
-        if (lowerOs.contains("mac")) {
-            return buildMacProcess(textToSpeak, rateWpm);
-        } else if (lowerOs.contains("win")) {
-            return buildWindowsProcess(textToSpeak, rateWpm);
-        } else {
-            return buildLinuxProcess(textToSpeak, rateWpm);
-        }
+        return resolveEngineForOs(os).buildProcess(textToSpeak, rateWpm);
     }
 
     public ProcessBuilder createProcessBuilder(String textToSpeak, int rateWpm) {
-        return createProcessBuilder(System.getProperty("os.name", ""), textToSpeak, rateWpm);
+        return engine.buildProcess(textToSpeak, rateWpm);
     }
 
+    @Override
     public synchronized void speakText(String text, int rateWpm, int sleepMinutes, Runnable onStop) {
         stop();
         if (text == null || text.isBlank()) {
@@ -123,6 +139,7 @@ public class TtsService {
         }
     }
 
+    @Override
     public synchronized void stop() {
         speaking = false;
         if (sleepTimer != null) {
@@ -140,6 +157,7 @@ public class TtsService {
         }
     }
 
+    @Override
     public boolean isSpeaking() {
         return speaking;
     }

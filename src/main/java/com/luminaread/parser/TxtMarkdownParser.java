@@ -24,6 +24,30 @@ public class TxtMarkdownParser implements BookParser {
     );
 
     @Override
+    public boolean supports(File file, String formatHint) {
+        if (formatHint != null) {
+            String upper = formatHint.toUpperCase(Locale.ROOT);
+            if (upper.equals("TXT") || upper.equals("MD") || upper.equals("MARKDOWN")
+                    || upper.equals("HTML") || upper.equals("HTM") || upper.equals("RTF")) {
+                return true;
+            }
+        }
+        if (file != null) {
+            String name = file.getName().toLowerCase(Locale.ROOT);
+            if (name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".markdown")
+                    || name.endsWith(".html") || name.endsWith(".htm") || name.endsWith(".rtf")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public String getSupportedFormat() {
+        return "TXT";
+    }
+
+    @Override
     public BookContent parse(File file) throws Exception {
         byte[] bytes = Files.readAllBytes(file.toPath());
         String rawText = CharsetDetector.decodeBytes(bytes);
