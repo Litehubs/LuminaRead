@@ -10,33 +10,14 @@ import com.luminaread.ui.ModernUiFactory;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
-import javax.tools.JavaCompiler;
-import javax.tools.ToolProvider;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.jar.Attributes;
-import java.util.jar.JarEntry;
-import java.util.jar.JarOutputStream;
-import java.util.jar.Manifest;
-import java.util.stream.Stream;
 
 public class LuminaReadApp {
 
     public static void main(String[] args) {
-        if (!"true".equals(System.getProperty("luminaread.rebuilt"))) {
-            if (tryAutoRebuildIfSourcesModified(args)) {
-                System.exit(0);
-                return;
-            }
-        }
-
         System.setProperty("apple.laf.useScreenMenuBar", "true");
         System.setProperty("apple.awt.application.name", "LuminaRead");
         System.setProperty("apple.awt.application.appearance", "system");
@@ -67,107 +48,6 @@ public class LuminaReadApp {
             window.setVisible(true);
             if (startupFile != null && startupFile.isFile()) window.importBookFromSystem(startupFile);
         });
-    }
-
-    private static boolean tryAutoRebuildIfSourcesModified(String[] args) {
-        try {
-            Path projectDir = Path.of(System.getProperty("user.dir"));
-            Path srcDir = projectDir.resolve("src/main/java");
-            if (!Files.isDirectory(srcDir)) {
-                return false;
-            }
-
-            Path jarFile = projectDir.resolve("LuminaRead.jar");
-            long jarTime = Files.exists(jarFile) ? Files.getLastModifiedTime(jarFile).toMillis() : 0L;
-
-            List<String> javaFiles = new ArrayList<>();
-            long newestSourceTime = 0L;
-            try (Stream<Path> walk = Files.walk(srcDir)) {
-                for (Path p : walk.filter(f -> f.toString().endsWith(".java")).toList()) {
-                    javaFiles.add(p.toAbsolutePath().toString());
-                    long t = Files.getLastModifiedTime(p).toMillis();
-                    if (t > newestSourceTime) {
-                        newestSourceTime = t;
-                    }
-                }
-            }
-
-            if (javaFiles.isEmpty() || newestSourceTime <= jarTime) {
-                return false;
-            }
-
-            JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-            if (compiler == null) {
-                return false;
-            }
-
-            Path classesDir = projectDir.resolve("build/classes");
-            if (Files.exists(classesDir)) {
-                try (Stream<Path> walk = Files.walk(classesDir)) {
-                    walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                        try { Files.deleteIfExists(p); } catch (Exception ignored) {}
-                    });
-                }
-            }
-            Files.createDirectories(classesDir);
-
-            List<String> compileArgs = new ArrayList<>();
-            compileArgs.add("-encoding");
-            compileArgs.add("UTF-8");
-
-            compileArgs.add("--release");
-            compileArgs.add("17");
-            compileArgs.add("-nowarn");
-            compileArgs.add("-d");
-            compileArgs.add(classesDir.toAbsolutePath().toString());
-            compileArgs.addAll(javaFiles);
-
-            int result = compiler.run(null, null, null, compileArgs.toArray(new String[0]));
-            if (result != 0) {
-                return false;
-            }
-
-            Files.deleteIfExists(jarFile);
-            Manifest manifest = new Manifest();
-            manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
-            manifest.getMainAttributes().put(Attributes.Name.MAIN_CLASS, "com.luminaread.LuminaReadApp");
-
-            try (JarOutputStream jos = new JarOutputStream(new FileOutputStream(jarFile.toFile()), manifest);
-                 Stream<Path> walk = Files.walk(classesDir)) {
-                for (Path p : walk.filter(Files::isRegularFile).toList()) {
-                    String entryName = classesDir.relativize(p).toString().replace('\\', '/');
-                    JarEntry entry = new JarEntry(entryName);
-                    jos.putNextEntry(entry);
-                    try (FileInputStream fis = new FileInputStream(p.toFile())) {
-                        fis.transferTo(jos);
-                    }
-                    jos.closeEntry();
-                }
-            }
-
-            String javaBin = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-            List<String> cmd = new ArrayList<>();
-            cmd.add(javaBin);
-            cmd.add("-Dluminaread.rebuilt=true");
-            cmd.add("-Dawt.useSystemAAFontSettings=on");
-            cmd.add("-Dswing.aatext=true");
-            cmd.add("-Dfile.encoding=UTF-8");
-            if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac")) {
-                cmd.add("-Dsun.java2d.metal=false");
-                cmd.add("-Dapple.laf.useScreenMenuBar=true");
-            }
-            cmd.add("-cp");
-            cmd.add(classesDir.toAbsolutePath().toString());
-            cmd.add("com.luminaread.LuminaReadApp");
-            if (args != null) {
-                for (String a : args) cmd.add(a);
-            }
-
-            new ProcessBuilder(cmd).directory(projectDir.toFile()).start();
-            return true;
-        } catch (Exception ignored) {
-            return false;
-        }
     }
 
     private static void ensureStarterBooksExist(LibraryStorageService storageService) {
