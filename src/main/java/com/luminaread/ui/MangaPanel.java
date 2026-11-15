@@ -37,6 +37,7 @@ public class MangaPanel extends JPanel {
     public static final int MODE_PAGED = 1;
 
     private final MangaService mangaService = new MangaService();
+    private final LatestSwingRequest<List<MangaItem>> catalogRequest = new LatestSwingRequest<>();
     private final LibAccountService accountService = LibAccountService.getInstance();
     private final YandexAuthService yandexService = YandexAuthService.getInstance();
     private final ExecutorService imagePool = Executors.newFixedThreadPool(6);
@@ -228,8 +229,8 @@ public class MangaPanel extends JPanel {
         searchField.setFont(new Font("SansSerif", Font.PLAIN, 15));
         searchField.setToolTipText("Поиск манги, манхвы, маньхуа (отдельно от книг)...");
         searchField.addActionListener(e -> {
-            categoryTabs.setSelectedIndex(0);
-            performSearch(searchField.getText());
+            if (categoryTabs.getSelectedIndex() == 0) performSearch(searchField.getText());
+            else categoryTabs.setSelectedIndex(0);
         });
 
         JButton findBtn = new JButton("🔍 Найти мангу / манхву");
@@ -238,8 +239,8 @@ public class MangaPanel extends JPanel {
         findBtn.setForeground(Color.WHITE);
         findBtn.setFocusPainted(false);
         findBtn.addActionListener(e -> {
-            categoryTabs.setSelectedIndex(0);
-            performSearch(searchField.getText());
+            if (categoryTabs.getSelectedIndex() == 0) performSearch(searchField.getText());
+            else categoryTabs.setSelectedIndex(0);
         });
 
         searchRow.add(searchField, BorderLayout.CENTER);
@@ -268,6 +269,7 @@ public class MangaPanel extends JPanel {
     }
 
     private void onCategoryChanged() {
+        catalogRequest.cancel();
         int idx = categoryTabs.getSelectedIndex();
         if (idx == 0) {
             performSearch(searchField.getText());
@@ -333,30 +335,18 @@ public class MangaPanel extends JPanel {
         gridContainer.revalidate();
         gridContainer.repaint();
 
-        new SwingWorker<List<LibBookmarkItem>, Void>() {
-            @Override
-            protected List<LibBookmarkItem> doInBackground() {
-
-                return accountService.fetchUserBookmarks(1, 0);
+        catalogRequest.start(() -> {
+            List<MangaItem> items = new ArrayList<>();
+            for (LibBookmarkItem bookmark : accountService.fetchUserBookmarks(1, 0)) {
+                String mangaId = bookmark.slugUrl.startsWith("mgl:") ? bookmark.slugUrl : "mgl:" + bookmark.slugUrl;
+                String desc = "Закладка MangaLib: " + bookmark.getStatusName()
+                        + (bookmark.lastReadChapter.isEmpty() ? "" : " (последняя глава: " + bookmark.lastReadChapter + ")");
+                items.add(new MangaItem(mangaId, bookmark.title, bookmark.rusTitle, desc, bookmark.coverUrl,
+                        "MangaLib (RU)", bookmark.getStatusName(), "★ Закладка"));
             }
-
-            @Override
-            protected void done() {
-                try {
-                    List<LibBookmarkItem> bookmarks = get();
-                    List<MangaItem> items = new ArrayList<>();
-                    for (LibBookmarkItem b : bookmarks) {
-                        String mangaId = b.slugUrl.startsWith("mgl:") ? b.slugUrl : ("mgl:" + b.slugUrl);
-                        String desc = "Закладка MangaLib: " + b.getStatusName()
-                                + (b.lastReadChapter.isEmpty() ? "" : " (последняя глава: " + b.lastReadChapter + ")");
-                        items.add(new MangaItem(mangaId, b.title, b.rusTitle, desc, b.coverUrl, "MangaLib (RU)", b.getStatusName(), "★ Закладка"));
-                    }
-                    renderMangaItems(items, "Закладок MangaLib загружено: " + items.size());
-                } catch (Exception ex) {
-                    statusLabel.setText("Ошибка загрузки закладок: " + ex.getMessage());
-                }
-            }
-        }.execute();
+            return items;
+        }, items -> renderMangaItems(items, "Закладок MangaLib загружено: " + items.size()),
+                error -> reportCatalogError("Ошибка загрузки закладок", error));
     }
 
     private JPanel buildDetailsView() {
@@ -1088,22 +1078,15 @@ public class MangaPanel extends JPanel {
         String rawSource = (String) sourceSelector.getSelectedItem();
         final String source = rawSource != null && !"Все источники".equals(rawSource) ? rawSource : "Все источники";
 
-        new SwingWorker<List<MangaItem>, Void>() {
-            @Override
-            protected List<MangaItem> doInBackground() {
-                return mangaService.searchManga(query, source);
-            }
+        catalogRequest.start(() -> mangaService.searchManga(query, source),
+                items -> renderMangaItems(items, "Найдено манги/манхвы: " + items.size()),
+                error -> reportCatalogError("Не удалось выполнить поиск манги", error));
+    }
 
-            @Override
-            protected void done() {
-                try {
-                    List<MangaItem> items = get();
-                    renderMangaItems(items, "Найдено манги/манхвы: " + items.size());
-                } catch (Exception e) {
-                    statusLabel.setText("Ошибка сети: " + e.getMessage());
-                }
-            }
-        }.execute();
+    private void reportCatalogError(String message, Throwable error) {
+        java.util.logging.Logger.getLogger(MangaPanel.class.getName())
+                .log(java.util.logging.Level.WARNING, message, error);
+        statusLabel.setText(message + ". Повторите попытку.");
     }
 
     private void renderMangaItems(List<MangaItem> items, String statusMsg) {
