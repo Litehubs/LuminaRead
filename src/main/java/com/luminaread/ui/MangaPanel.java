@@ -36,7 +36,10 @@ public class MangaPanel extends JPanel {
     public static final int MODE_SCROLL = 0;
     public static final int MODE_PAGED = 1;
 
-    private final MangaService mangaService = new MangaService();
+    private final MangaService mangaService;
+    private final LatestSwingRequest<ImageIcon> detailCoverRequest = new LatestSwingRequest<>();
+    private final LatestSwingRequest<List<MangaChapter>> detailChaptersRequest = new LatestSwingRequest<>();
+    private final LatestSwingRequest<String> detailDescriptionRequest = new LatestSwingRequest<>();
     private final LatestSwingRequest<List<MangaItem>> catalogRequest = new LatestSwingRequest<>();
     private final LibAccountService accountService = LibAccountService.getInstance();
     private final YandexAuthService yandexService = YandexAuthService.getInstance();
@@ -121,7 +124,12 @@ public class MangaPanel extends JPanel {
     }
 
     public MangaPanel(Consumer<Boolean> onToggleSidebar) {
+        this(onToggleSidebar, new MangaService(), true);
+    }
+
+    MangaPanel(Consumer<Boolean> onToggleSidebar, MangaService mangaService, boolean initialSearch) {
         this.onToggleSidebar = onToggleSidebar;
+        this.mangaService = mangaService;
         setLayout(new BorderLayout());
         setBackground(new Color(20, 22, 29));
 
@@ -137,7 +145,7 @@ public class MangaPanel extends JPanel {
         accountService.addAuthListener(user -> SwingUtilities.invokeLater(this::updateAuthButtonState));
         updateAuthButtonState();
 
-        performSearch("");
+        if (initialSearch) performSearch("");
     }
 
     private void loadPreferences() {
@@ -359,6 +367,8 @@ public class MangaPanel extends JPanel {
         JButton backBtn = new JButton("← Назад в каталог манги");
         backBtn.setFocusPainted(false);
         backBtn.addActionListener(e -> {
+            cancelDetailRequests();
+            currentLoadToken.incrementAndGet();
             if (onToggleSidebar != null) onToggleSidebar.accept(true);
             viewLayout.show(mainContainer, "EXPLORE");
         });
@@ -1167,6 +1177,9 @@ public class MangaPanel extends JPanel {
     }
 
     private void showMangaDetails(MangaItem item) {
+        cancelDetailRequests();
+        currentLoadToken.incrementAndGet();
+        currentPages = Collections.emptyList();
         this.currentManga = item;
         historyManga.put(item.id, item);
         savePreferences();
@@ -1178,56 +1191,57 @@ public class MangaPanel extends JPanel {
 
         detailCover.setIcon(null);
         detailCover.setText("Загрузка...");
+        allChapters = Collections.emptyList();
+        currentChapterList = new ArrayList<>();
         chapterListModel.clear();
+        updatingLanguage = true;
+        try {
+            languageCombo.removeAllItems();
+            languageCombo.setEnabled(false);
+        } finally {
+            updatingLanguage = false;
+        }
         viewLayout.show(mainContainer, "DETAILS");
 
-        imagePool.submit(() -> {
-            BufferedImage img = mangaService.loadImageCached(item.coverUrl);
-            if (img != null) {
-                SwingUtilities.invokeLater(() -> {
-                    detailCover.setText("");
-                    detailCover.setIcon(new ImageIcon(createSmoothThumbnail(img, 145, 205)));
-                });
-            }
+        detailCoverRequest.start(() -> {
+            BufferedImage image = mangaService.loadImageCached(item.coverUrl);
+            return image == null ? null : new ImageIcon(createSmoothThumbnail(image, 145, 205));
+        }, this::showDetailCover, error -> {
+            reportDetailError("Не удалось загрузить обложку", error);
+            showDetailCover(null);
         });
 
-        new SwingWorker<List<MangaChapter>, Void>() {
-            @Override
-            protected List<MangaChapter> doInBackground() {
-                return mangaService.fetchChapters(item);
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    allChapters = get();
-                    buildLanguageSelector();
-                    applyLanguageFilter();
-                } catch (Exception ignored) {}
-            }
-        }.execute();
+        detailChaptersRequest.start(() -> List.copyOf(mangaService.fetchChapters(item)), chapters -> {
+            allChapters = chapters;
+            buildLanguageSelector();
+            languageCombo.setEnabled(languageCombo.getItemCount() > 0);
+            applyLanguageFilter();
+        }, error -> reportDetailError("Не удалось загрузить главы", error));
 
         if (item.source != null && (item.source.startsWith("MangaLib") || item.source.startsWith("Remanga"))) {
-            final MangaItem target = item;
-            new SwingWorker<String, Void>() {
-                @Override
-                protected String doInBackground() {
-                    return mangaService.fetchDescription(target);
+            detailDescriptionRequest.start(() -> mangaService.fetchDescription(item), full -> {
+                if (full != null && !full.isEmpty()) {
+                    detailDesc.setText(full);
+                    detailDesc.setCaretPosition(0);
                 }
-
-                @Override
-                protected void done() {
-                    try {
-                        String full = get();
-                        if (full != null && !full.isEmpty() && currentManga != null
-                                && currentManga.id.equals(target.id)) {
-                            detailDesc.setText(full);
-                            detailDesc.setCaretPosition(0);
-                        }
-                    } catch (Exception ignored) {}
-                }
-            }.execute();
+            }, error -> reportDetailError("Не удалось загрузить описание", error));
         }
+    }
+
+    private void cancelDetailRequests() {
+        detailCoverRequest.cancel();
+        detailChaptersRequest.cancel();
+        detailDescriptionRequest.cancel();
+    }
+
+    private void showDetailCover(ImageIcon icon) {
+        detailCover.setIcon(icon);
+        detailCover.setText(icon == null ? "Обложка недоступна" : "");
+    }
+
+    private void reportDetailError(String message, Throwable error) {
+        java.util.logging.Logger.getLogger(MangaPanel.class.getName())
+                .log(java.util.logging.Level.WARNING, message, error);
     }
 
     private void openChapterAtIndex(int idx) {
