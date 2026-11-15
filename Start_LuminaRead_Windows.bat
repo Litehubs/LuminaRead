@@ -23,7 +23,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist "LuminaRead.jar" (
+set "JAR_PATH=target\LuminaRead-2.0.0.jar"
+if not exist "%JAR_PATH%" set "JAR_PATH=LuminaRead.jar"
+if not exist "%JAR_PATH%" (
     echo.
     echo  [ERROR] LuminaRead.jar was not found in: %cd%
     echo  Please keep LuminaRead.jar and this .bat file in the same directory.
@@ -39,5 +41,5 @@ if errorlevel 1 (
     set "JAVA_RUNNER=javaw"
 )
 
-start "" %JAVA_RUNNER% %JAVA_OPTS% -jar "LuminaRead.jar" %*
+start "" %JAVA_RUNNER% %JAVA_OPTS% -jar "%JAR_PATH%" %*
 exit /b 0

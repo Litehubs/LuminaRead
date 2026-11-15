@@ -2,17 +2,30 @@
 
 **LuminaRead** — настольное приложение на Java для **macOS (MacBook Air / Pro на Apple Silicon и Intel)**, **Windows** и **Linux**, объединяющее минималистичный дизайн, все ключевые возможности **Moon+ Reader Pro** и встроенный загрузчик книг из онлайн-библиотек и OPDS-каталогов.
 
-> **Требования:** установленная **Java 17 или новее** (рекомендуется Temurin JDK/JRE 17+ или 21 — https://adoptium.net/). Архив уже собран под **Java 17** и запускается на **Windows 10/11** (Home/Pro/Enterprise, x64), macOS и Linux.
+> **Требования:** установленная **Java 17 или новее** (рекомендуется Temurin JDK/JRE 17+ или 21 — https://adoptium.net/). Для сборки из исходников также нужны JDK и Maven.
 
-## Как запустить за 1 секунду
+## Сборка из исходников
 
-В архив уже включен готовый скомпилированный файл **`LuminaRead.jar`** и полный исходный код:
+Для сборки нужны JDK 17+ и Maven. Из корня проекта выполните:
 
-* **На macOS**: дважды кликните по файлу **`Start_LuminaRead_Mac.command`** или **`LuminaRead.jar`**, либо выполните в Терминале:
+```bash
+mvn clean package
+java -jar target/LuminaRead-2.0.0.jar
+```
+
+Maven запускает автономные регрессионные проверки и включает необходимые библиотеки, в том числе поддержку WebP, в итоговый JAR. Для первой сборки требуется доступ к Maven Central. Готовые JAR-файлы не хранятся в исходном коде проекта.
+
+Скрипты запуска используют сборку из `target`, если она существует; иначе они запускают `LuminaRead.jar` рядом со скриптом. В готовом дистрибутиве можно размещать JAR рядом со скриптами без папки `target`.
+
+## Запуск приложения
+
+После сборки запустите подходящий скрипт или выполните `java -jar target/LuminaRead-2.0.0.jar`. Если получаете готовый дистрибутив, поместите собранный JAR рядом со скриптами под именем `LuminaRead.jar`.
+
+* **На macOS**: дважды кликните по файлу **`Start_LuminaRead_Mac.command`**, либо выполните в Терминале:
   ```bash
-  java -jar LuminaRead.jar
+  java -jar target/LuminaRead-2.0.0.jar
   ```
-* **На Windows (10 / 11)**: дважды кликните по файлу **`Start_LuminaRead_Windows.bat`** (автоматически проверяет Java, настраивает UTF-8 и сглаживание шрифтов) или запустите **`LuminaRead.jar`**.
+* **На Windows (10 / 11)**: дважды кликните по файлу **`Start_LuminaRead_Windows.bat`** или запустите собранный JAR.
 * **На Linux (Ubuntu, Debian, Fedora, Arch)**: запустите скрипт **`Start_LuminaRead_Linux.sh`** (автоматически проверяет наличие Java 17+, графического интерфейса и сглаживания текста):
   ```bash
   chmod +x Start_LuminaRead_Linux.sh
@@ -20,7 +33,7 @@
   ```
   Или запустите напрямую через Java:
   ```bash
-  java -Dawt.useSystemAAFontSettings=on -Dswing.aatext=true -Dfile.encoding=UTF-8 -jar LuminaRead.jar
+  java -Dawt.useSystemAAFontSettings=on -Dswing.aatext=true -Dfile.encoding=UTF-8 -jar target/LuminaRead-2.0.0.jar
   ```
 * **В IntelliJ IDEA / Eclipse / VS Code**: откройте папку проекта как Maven-проект (`pom.xml`) и запустите класс `com.luminaread.LuminaReadApp`.
 

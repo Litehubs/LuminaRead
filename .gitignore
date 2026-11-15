@@ -4,6 +4,9 @@ bin/
 build/
 *.class
 sources.txt
+/LuminaRead.jar
+/lib/*.jar
+/luminaread-backup-*/
 
 # Package archives & OS bundles
 *.zip

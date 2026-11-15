@@ -69,6 +69,14 @@ public class ReaderDisplayConfig implements Serializable {
 
     public ReaderDisplayConfig() {}
 
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     public String getThemeId() {
         return Objects.requireNonNullElse(themeId, "DAY_PAPER");
     }
@@ -90,7 +98,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setFontSize(int fontSize) {
-        this.fontSize = Math.clamp(fontSize, MIN_FONT_SIZE, MAX_FONT_SIZE);
+        this.fontSize = clamp(fontSize, MIN_FONT_SIZE, MAX_FONT_SIZE);
     }
 
     public double getLineHeight() {
@@ -98,7 +106,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setLineHeight(double lineHeight) {
-        this.lineHeight = Math.clamp(lineHeight, MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+        this.lineHeight = clamp(lineHeight, MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
     }
 
     public int getParagraphSpacingPx() {
@@ -106,7 +114,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setParagraphSpacingPx(int paragraphSpacingPx) {
-        this.paragraphSpacingPx = Math.clamp(paragraphSpacingPx, MIN_PARAGRAPH_SPACING, MAX_PARAGRAPH_SPACING);
+        this.paragraphSpacingPx = clamp(paragraphSpacingPx, MIN_PARAGRAPH_SPACING, MAX_PARAGRAPH_SPACING);
     }
 
     public int getHorizontalMarginPx() {
@@ -114,7 +122,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setHorizontalMarginPx(int horizontalMarginPx) {
-        this.horizontalMarginPx = Math.clamp(horizontalMarginPx, MIN_HORIZONTAL_MARGIN, MAX_HORIZONTAL_MARGIN);
+        this.horizontalMarginPx = clamp(horizontalMarginPx, MIN_HORIZONTAL_MARGIN, MAX_HORIZONTAL_MARGIN);
     }
 
     public int getVerticalMarginPx() {
@@ -122,7 +130,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setVerticalMarginPx(int verticalMarginPx) {
-        this.verticalMarginPx = Math.clamp(verticalMarginPx, MIN_VERTICAL_MARGIN, MAX_VERTICAL_MARGIN);
+        this.verticalMarginPx = clamp(verticalMarginPx, MIN_VERTICAL_MARGIN, MAX_VERTICAL_MARGIN);
     }
 
     public TextAlignment getTextAlignment() {
@@ -154,7 +162,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setCharsPerPage(int charsPerPage) {
-        this.charsPerPage = Math.clamp(charsPerPage, MIN_CHARS_PER_PAGE, MAX_CHARS_PER_PAGE);
+        this.charsPerPage = clamp(charsPerPage, MIN_CHARS_PER_PAGE, MAX_CHARS_PER_PAGE);
     }
 
     public double getDimmerOpacity() {
@@ -162,7 +170,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setDimmerOpacity(double dimmerOpacity) {
-        this.dimmerOpacity = Math.clamp(dimmerOpacity, MIN_DIMMER_OPACITY, MAX_DIMMER_OPACITY);
+        this.dimmerOpacity = clamp(dimmerOpacity, MIN_DIMMER_OPACITY, MAX_DIMMER_OPACITY);
     }
 
     public boolean isWarmEyeCareFilter() {
@@ -178,7 +186,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setAutoScrollSpeed(int autoScrollSpeed) {
-        this.autoScrollSpeed = Math.clamp(autoScrollSpeed, MIN_AUTOSCROLL_SPEED, MAX_AUTOSCROLL_SPEED);
+        this.autoScrollSpeed = clamp(autoScrollSpeed, MIN_AUTOSCROLL_SPEED, MAX_AUTOSCROLL_SPEED);
     }
 
     public int getTtsRateWpm() {
@@ -186,7 +194,7 @@ public class ReaderDisplayConfig implements Serializable {
     }
 
     public void setTtsRateWpm(int ttsRateWpm) {
-        this.ttsRateWpm = Math.clamp(ttsRateWpm, MIN_TTS_RATE_WPM, MAX_TTS_RATE_WPM);
+        this.ttsRateWpm = clamp(ttsRateWpm, MIN_TTS_RATE_WPM, MAX_TTS_RATE_WPM);
     }
 
     public boolean isTapZonesEnabled() {
