@@ -27,8 +27,6 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.*;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -40,7 +38,14 @@ public class RanobePanel extends JPanel {
     private final RanobeService ranobeService = new RanobeService();
     private final LibAccountService accountService = LibAccountService.getInstance();
     private final YandexAuthService yandexService = YandexAuthService.getInstance();
-    private final ExecutorService threadPool = Executors.newFixedThreadPool(4);
+    private final PanelWorkers workers = new PanelWorkers(4);
+    private volatile boolean disposed;
+    private final Consumer<YandexUser> yandexListener = user -> SwingUtilities.invokeLater(() -> {
+        if (!disposed) updateAuthButtonState();
+    });
+    private final Consumer<LibUser> libListener = user -> SwingUtilities.invokeLater(() -> {
+        if (!disposed) updateAuthButtonState();
+    });
     private final AtomicInteger loadToken = new AtomicInteger(0);
     private final Consumer<Boolean> onToggleSidebar;
 
@@ -123,11 +128,21 @@ public class RanobePanel extends JPanel {
 
         add(mainContainer, BorderLayout.CENTER);
 
-        yandexService.addAuthListener(user -> SwingUtilities.invokeLater(this::updateAuthButtonState));
-        accountService.addAuthListener(user -> SwingUtilities.invokeLater(this::updateAuthButtonState));
+        yandexService.addAuthListener(yandexListener);
+        accountService.addAuthListener(libListener);
         updateAuthButtonState();
 
         performSearch("");
+    }
+
+    public void disposeResources() {
+        if (disposed) return;
+        disposed = true;
+        yandexService.removeAuthListener(yandexListener);
+        accountService.removeAuthListener(libListener);
+        loadToken.incrementAndGet();
+        workers.close();
+        stopAutoScroll();
     }
 
     private void loadPreferences() {
@@ -268,6 +283,7 @@ public class RanobePanel extends JPanel {
     }
 
     private void loadLibBookmarks() {
+        if (disposed) return;
         YandexUser ya = yandexService.getCurrentUser();
         LibUser lib = accountService.getCurrentUser();
 
@@ -316,7 +332,7 @@ public class RanobePanel extends JPanel {
         }
 
         statusLabel.setText("⏳ Загрузка закладок RanobeLib из профиля...");
-        new SwingWorker<List<LibBookmarkItem>, Void>() {
+        workers.start(new SwingWorker<List<LibBookmarkItem>, Void>() {
             @Override
             protected List<LibBookmarkItem> doInBackground() {
                 return accountService.fetchUserBookmarks(3, 0);
@@ -324,6 +340,7 @@ public class RanobePanel extends JPanel {
 
             @Override
             protected void done() {
+                if (disposed) return;
                 try {
                     List<LibBookmarkItem> bmarks = get();
                     List<RanobeItem> items = new ArrayList<>();
@@ -339,16 +356,17 @@ public class RanobePanel extends JPanel {
                     statusLabel.setText("Ошибка загрузки закладок: " + ex.getMessage());
                 }
             }
-        }.execute();
+        });
     }
 
     private void performSearch(String query) {
+        if (disposed) return;
         statusLabel.setText("⏳ Поиск ранобэ и новелл в RanobeLib...");
         gridContainer.removeAll();
         gridContainer.revalidate();
         gridContainer.repaint();
 
-        new SwingWorker<List<RanobeItem>, Void>() {
+        workers.start(new SwingWorker<List<RanobeItem>, Void>() {
             @Override
             protected List<RanobeItem> doInBackground() {
                 return ranobeService.searchRanobe(query);
@@ -356,6 +374,7 @@ public class RanobePanel extends JPanel {
 
             @Override
             protected void done() {
+                if (disposed) return;
                 try {
                     List<RanobeItem> items = get();
                     renderRanobeItems(items, "Найдено тайтлов ранобэ: " + items.size());
@@ -363,7 +382,7 @@ public class RanobePanel extends JPanel {
                     statusLabel.setText("Ошибка сети: " + e.getMessage());
                 }
             }
-        }.execute();
+        });
     }
 
     private void renderRanobeItems(List<RanobeItem> items, String statusMsg) {
@@ -391,11 +410,12 @@ public class RanobePanel extends JPanel {
         coverLbl.setForeground(new Color(120, 125, 140));
 
         if (item.coverUrl != null && !item.coverUrl.isEmpty()) {
-            threadPool.submit(() -> {
+            workers.execute(() -> {
                 Image img = loadImageAwt(item.coverUrl);
                 if (img != null) {
                     Image scaled = img.getScaledInstance(92, 132, Image.SCALE_SMOOTH);
                     SwingUtilities.invokeLater(() -> {
+                        if (disposed) return;
                         coverLbl.setText("");
                         coverLbl.setIcon(new ImageIcon(scaled));
                     });
@@ -579,6 +599,7 @@ public class RanobePanel extends JPanel {
     }
 
     private void showRanobeDetails(RanobeItem item) {
+        if (disposed) return;
         this.currentRanobe = item;
         historyRanobe.put(item.id, item);
         savePreferences();
@@ -593,18 +614,19 @@ public class RanobePanel extends JPanel {
         chapterListModel.clear();
         viewLayout.show(mainContainer, "DETAILS");
 
-        threadPool.submit(() -> {
+        workers.execute(() -> {
             Image img = loadImageAwt(item.coverUrl);
             if (img != null) {
                 Image scaled = img.getScaledInstance(145, 205, Image.SCALE_SMOOTH);
                 SwingUtilities.invokeLater(() -> {
+                    if (disposed) return;
                     detailCover.setText("");
                     detailCover.setIcon(new ImageIcon(scaled));
                 });
             }
         });
 
-        new SwingWorker<List<RanobeChapter>, Void>() {
+        workers.start(new SwingWorker<List<RanobeChapter>, Void>() {
             @Override
             protected List<RanobeChapter> doInBackground() {
                 return ranobeService.fetchChapters(item.id);
@@ -612,14 +634,15 @@ public class RanobePanel extends JPanel {
 
             @Override
             protected void done() {
+                if (disposed) return;
                 try {
                     allChapters = get();
                     filterChapters("");
                 } catch (Exception ignored) {}
             }
-        }.execute();
+        });
 
-        new SwingWorker<RanobeItem, Void>() {
+        workers.start(new SwingWorker<RanobeItem, Void>() {
             @Override
             protected RanobeItem doInBackground() {
                 return ranobeService.fetchRanobeDetails(item);
@@ -627,6 +650,7 @@ public class RanobePanel extends JPanel {
 
             @Override
             protected void done() {
+                if (disposed) return;
                 try {
                     RanobeItem full = get();
                     if (full != null && currentRanobe != null && currentRanobe.id.equals(full.id)) {
@@ -637,7 +661,7 @@ public class RanobePanel extends JPanel {
                     }
                 } catch (Exception ignored) {}
             }
-        }.execute();
+        });
     }
 
     private void toggleChapterSortOrder() {
@@ -972,6 +996,7 @@ public class RanobePanel extends JPanel {
     }
 
     private void openChapterAtIndex(int idx) {
+        if (disposed) return;
         if (filteredChapters == null || idx < 0 || idx >= filteredChapters.size()) return;
         currentChapterIndex = idx;
         currentPageIndex = 0;
@@ -989,7 +1014,7 @@ public class RanobePanel extends JPanel {
                 + "<h2>⏳ Загрузка главы " + currentChapter.number + "...</h2></body></html>");
         viewLayout.show(mainContainer, "READER");
 
-        new SwingWorker<RanobeChapterContent, Void>() {
+        workers.start(new SwingWorker<RanobeChapterContent, Void>() {
             @Override
             protected RanobeChapterContent doInBackground() throws Exception {
                 return ranobeService.fetchChapterContent(currentChapter, currentRanobe != null ? currentRanobe.id : null);
@@ -997,6 +1022,7 @@ public class RanobePanel extends JPanel {
 
             @Override
             protected void done() {
+                if (disposed) return;
                 if (token != loadToken.get()) return;
                 try {
                     currentContent = get();
@@ -1008,7 +1034,7 @@ public class RanobePanel extends JPanel {
                             + "<p>Возможно, глава платная или доступна только на сайте.</p></body></html>");
                 }
             }
-        }.execute();
+        });
     }
 
     private void navigateChapter(int dir) {
@@ -1037,6 +1063,7 @@ public class RanobePanel extends JPanel {
     private void resetScrollPosition() {
         SmoothScrollUtil.resetScroll(readerScrollPane, 0);
         SwingUtilities.invokeLater(() -> {
+            if (disposed) return;
             if (readerScrollPane != null) {
                 SmoothScrollUtil.resetScroll(readerScrollPane, 0);
             }
@@ -1044,6 +1071,7 @@ public class RanobePanel extends JPanel {
     }
 
     private void renderChapterText() {
+        if (disposed) return;
         if (currentContent == null) return;
 
         Color bg = getThemeBackground();

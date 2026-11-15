@@ -115,6 +115,10 @@ public class LibAccountService {
         }
     }
 
+    public void removeAuthListener(Consumer<LibUser> listener) {
+        authListeners.remove(listener);
+    }
+
     private void notifyListeners() {
         for (Consumer<LibUser> l : authListeners) {
             try {

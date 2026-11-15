@@ -22,8 +22,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -43,7 +41,14 @@ public class MangaPanel extends JPanel {
     private final LatestSwingRequest<List<MangaItem>> catalogRequest = new LatestSwingRequest<>();
     private final LibAccountService accountService = LibAccountService.getInstance();
     private final YandexAuthService yandexService = YandexAuthService.getInstance();
-    private final ExecutorService imagePool = Executors.newFixedThreadPool(6);
+    private final PanelWorkers workers = new PanelWorkers(6);
+    private volatile boolean disposed;
+    private final Consumer<YandexUser> yandexListener = user -> SwingUtilities.invokeLater(() -> {
+        if (!disposed) updateAuthButtonState();
+    });
+    private final Consumer<LibUser> libListener = user -> SwingUtilities.invokeLater(() -> {
+        if (!disposed) updateAuthButtonState();
+    });
     private final AtomicInteger currentLoadToken = new AtomicInteger(0);
     private final Consumer<Boolean> onToggleSidebar;
 
@@ -141,11 +146,23 @@ public class MangaPanel extends JPanel {
 
         add(mainContainer, BorderLayout.CENTER);
 
-        yandexService.addAuthListener(user -> SwingUtilities.invokeLater(this::updateAuthButtonState));
-        accountService.addAuthListener(user -> SwingUtilities.invokeLater(this::updateAuthButtonState));
+        yandexService.addAuthListener(yandexListener);
+        accountService.addAuthListener(libListener);
         updateAuthButtonState();
 
         if (initialSearch) performSearch("");
+    }
+
+    public void disposeResources() {
+        if (disposed) return;
+        disposed = true;
+        yandexService.removeAuthListener(yandexListener);
+        accountService.removeAuthListener(libListener);
+        catalogRequest.cancel();
+        cancelDetailRequests();
+        currentLoadToken.incrementAndGet();
+        workers.close();
+        stopAutoScroll();
     }
 
     private void loadPreferences() {
@@ -291,6 +308,7 @@ public class MangaPanel extends JPanel {
     }
 
     private void loadLibBookmarks() {
+        if (disposed) return;
         YandexUser ya = yandexService.getCurrentUser();
         LibUser lib = accountService.getCurrentUser();
 
@@ -1080,6 +1098,7 @@ public class MangaPanel extends JPanel {
     }
 
     private void performSearch(String query) {
+        if (disposed) return;
         statusLabel.setText("⏳ Поиск манги и манхвы в онлайн-источниках...");
         gridContainer.removeAll();
         gridContainer.revalidate();
@@ -1124,10 +1143,11 @@ public class MangaPanel extends JPanel {
         coverLbl.setForeground(new Color(120, 125, 140));
 
         if (item.coverUrl != null && !item.coverUrl.isEmpty()) {
-            imagePool.submit(() -> {
+            workers.execute(() -> {
                 BufferedImage img = mangaService.loadImageCached(item.coverUrl);
                 if (img != null) {
                     SwingUtilities.invokeLater(() -> {
+                        if (disposed) return;
                         coverLbl.setText("");
                         coverLbl.setIcon(new ImageIcon(createSmoothThumbnail(img, 92, 132)));
                     });
@@ -1177,6 +1197,7 @@ public class MangaPanel extends JPanel {
     }
 
     private void showMangaDetails(MangaItem item) {
+        if (disposed) return;
         cancelDetailRequests();
         currentLoadToken.incrementAndGet();
         currentPages = Collections.emptyList();
@@ -1245,6 +1266,7 @@ public class MangaPanel extends JPanel {
     }
 
     private void openChapterAtIndex(int idx) {
+        if (disposed) return;
         if (currentChapterList == null || idx < 0 || idx >= currentChapterList.size()) return;
         currentChapterIndex = idx;
         final int targetInitialPage = currentPageIndex == -1 ? -1 : 0;
@@ -1278,7 +1300,7 @@ public class MangaPanel extends JPanel {
 
         viewLayout.show(mainContainer, "READER");
 
-        new SwingWorker<List<String>, Void>() {
+        workers.start(new SwingWorker<List<String>, Void>() {
             @Override
             protected List<String> doInBackground() {
                 return mangaService.fetchPageUrls(ch);
@@ -1286,6 +1308,7 @@ public class MangaPanel extends JPanel {
 
             @Override
             protected void done() {
+                if (disposed) return;
                 if (token != currentLoadToken.get()) return;
                 try {
                     currentPages = get();
@@ -1301,7 +1324,7 @@ public class MangaPanel extends JPanel {
                     renderReaderPages();
                 }
             }
-        }.execute();
+        });
     }
 
     private void goChapter(int dir) {
@@ -1369,6 +1392,7 @@ public class MangaPanel extends JPanel {
     }
 
     private void renderReaderPages() {
+        if (disposed) return;
         readerCanvasPanel.removeAll();
         readerCanvasPanel.setBackground(readerBgColor);
         readerScrollPane.getViewport().setBackground(readerBgColor);
@@ -1442,6 +1466,7 @@ public class MangaPanel extends JPanel {
         }
 
         SwingUtilities.invokeLater(() -> {
+            if (disposed) return;
             if (readerScrollPane != null) {
                 readerScrollPane.getVerticalScrollBar().setValue(0);
                 updateScrollProgress();
@@ -1465,11 +1490,12 @@ public class MangaPanel extends JPanel {
         );
         readerCanvasPanel.add(pagePanel);
 
-        imagePool.submit(() -> {
+        workers.execute(() -> {
             if (token != currentLoadToken.get()) return;
             BufferedImage img = mangaService.loadImageCached(url);
             if (token != currentLoadToken.get()) return;
             SwingUtilities.invokeLater(() -> {
+                if (disposed) return;
                 if (token != currentLoadToken.get()) return;
                 if (img != null) {
                     pagePanel.setImage(img, targetWidth, alignmentMode, dimmerOpacity, pageGap);
@@ -1482,10 +1508,11 @@ public class MangaPanel extends JPanel {
     }
 
     private void reloadSinglePage(String url, int pageNum, int targetWidth, int token) {
-        imagePool.submit(() -> {
+        workers.execute(() -> {
             BufferedImage img = mangaService.loadImageCached(url);
             if (token != currentLoadToken.get()) return;
             SwingUtilities.invokeLater(() -> {
+                if (disposed) return;
                 if (token != currentLoadToken.get()) return;
                 renderReaderPages();
             });

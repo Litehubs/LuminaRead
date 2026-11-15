@@ -105,6 +105,10 @@ public class YandexAuthService {
         }
     }
 
+    public void removeAuthListener(Consumer<YandexUser> listener) {
+        authListeners.remove(listener);
+    }
+
     private void notifyListeners() {
         YandexUser u = currentUser;
         for (Consumer<YandexUser> l : authListeners) {
