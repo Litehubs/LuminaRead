@@ -33,6 +33,25 @@ jobs:
         shell: pwsh
         run: |
           $artifact = Get-Item target/LuminaRead-2.0.0.jar
+          $archive = [IO.Compression.ZipFile]::OpenRead($artifact.FullName)
+          try {
+            $notices = @('LICENSE', 'licenses/twelvemonkeys/LICENSE.txt',
+              'licenses/twelvemonkeys/imageio-core.txt', 'licenses/twelvemonkeys/imageio-metadata.txt')
+            foreach ($notice in $notices) {
+              $entry = $archive.GetEntry("META-INF/$notice")
+              if ($null -eq $entry) { throw "Missing license notice: $notice" }
+              $stream = $entry.Open()
+              try {
+                $embeddedHash = (Get-FileHash -InputStream $stream).Hash
+                $sourceHash = (Get-FileHash -LiteralPath $notice).Hash
+                if ($embeddedHash -ne $sourceHash) { throw "Incorrect license notice: $notice" }
+              } finally {
+                $stream.Dispose()
+              }
+            }
+          } finally {
+            $archive.Dispose()
+          }
           $profileDirectory = New-Item -ItemType Directory -Path (
             Join-Path ([IO.Path]::GetTempPath()) ("luminaread-check-" + [Guid]::NewGuid())
           )
