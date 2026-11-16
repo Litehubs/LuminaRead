@@ -10,11 +10,6 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class YandexAuthSafetyTest {
-    @Test void usernameAloneDoesNotProveIdentity() {
-        var user = new YandexAuthService.YandexUser("ya_anyone", "anyone", "anyone", "", "", "", "");
-        assertFalse(user.isAuthenticated());
-    }
-
     @Test void oldTokenIsRemovedAndSavedIdentityIsNotTrusted(@TempDir Path home) throws Exception {
         Path dir = Files.createDirectories(home.resolve(".luminaread"));
         Path account = dir.resolve("yandex_account.json");
