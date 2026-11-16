@@ -68,7 +68,7 @@ final class CatalogExploreView extends JPanel {
     }
 
     private static void addFilter(JPanel filters, String caption, JComboBox<String> combo) {
-        CatalogListControls.applyReadableColors(combo);
+        ModernUiFactory.applyReadableComboColors(combo);
         JLabel label = new JLabel(caption);
         label.setForeground(new Color(180, 185, 200));
         label.setLabelFor(combo);

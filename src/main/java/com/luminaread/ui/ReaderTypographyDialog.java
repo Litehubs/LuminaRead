@@ -71,18 +71,23 @@ final class ReaderTypographyDialog {
         JSlider ttsRateSlider = new JSlider(110, 300, s.getTtsRateWpm());
 
         form.add(new JLabel("Цветовая тема:"));
+        ModernUiFactory.applyReadableComboColors(themeCombo);
         form.add(themeCombo);
         form.add(new JLabel("Шрифт:"));
+        ModernUiFactory.applyReadableComboColors(fontCombo);
         form.add(fontCombo);
         form.add(new JLabel("Размер шрифта (пт):"));
         form.add(fontSizeSlider);
         form.add(new JLabel("Межстрочный интервал:"));
+        ModernUiFactory.applyReadableComboColors(lineHeightCombo);
         form.add(lineHeightCombo);
         form.add(new JLabel("Выравнивание текста:"));
+        ModernUiFactory.applyReadableComboColors(alignCombo);
         form.add(alignCombo);
         form.add(new JLabel("Боковые поля страницы (px):"));
         form.add(marginSlider);
-        form.add(new JLabel("Режим перелистывания:"));
+        form.add(new JLabel("Режим чтения:"));
+        ModernUiFactory.applyReadableComboColors(modeCombo);
         form.add(modeCombo);
         form.add(new JLabel("Книжный разворот:"));
         form.add(twoColCheck);

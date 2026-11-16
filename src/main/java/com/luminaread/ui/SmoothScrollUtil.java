@@ -4,6 +4,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.MouseWheelEvent;
 import java.awt.event.MouseWheelListener;
+import java.util.function.IntPredicate;
 
 public class SmoothScrollUtil {
 
@@ -26,6 +27,11 @@ public class SmoothScrollUtil {
             scroller = new SmoothScroller(scrollPane);
             scrollPane.putClientProperty(SCROLLER_KEY, scroller);
         }
+    }
+
+    static void onWheelBoundary(JScrollPane pane, IntPredicate handler) {
+        enhance(pane);
+        ((SmoothScroller) pane.getClientProperty(SCROLLER_KEY)).boundaryHandler = handler;
     }
 
     public static void smoothScrollBy(JScrollPane sp, double delta) {
@@ -65,6 +71,7 @@ public class SmoothScrollUtil {
         private double targetY;
         private double currentY;
         private boolean isSelfAdjusting = false;
+        private IntPredicate boundaryHandler;
 
         public SmoothScroller(JScrollPane scrollPane) {
             this.scrollPane = scrollPane;
@@ -103,12 +110,17 @@ public class SmoothScrollUtil {
 
             JScrollBar vBar = scrollPane.getVerticalScrollBar();
             if (vBar == null) return;
-            int extent = scrollPane.getViewport().getHeight();
-            int max = vBar.getMaximum() - extent;
-            if (max <= 0) return;
-
+            int max = Math.max(0, vBar.getMaximum() - vBar.getVisibleAmount());
             double rot = e.getPreciseWheelRotation();
             if (Math.abs(rot) < 0.001) rot = e.getWheelRotation();
+            int direction = rot > 0 ? 1 : rot < 0 ? -1 : 0;
+            boolean atBoundary = direction > 0 && vBar.getValue() >= max
+                    || direction < 0 && vBar.getValue() <= vBar.getMinimum();
+            if (atBoundary && boundaryHandler != null && boundaryHandler.test(direction)) {
+                e.consume();
+                return;
+            }
+            if (max <= 0 || direction == 0) return;
 
             double factor = (Math.abs(rot) < 0.3) ? 42.0 : 62.0;
             double delta = rot * factor;

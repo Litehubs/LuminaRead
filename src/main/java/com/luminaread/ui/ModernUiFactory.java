@@ -3,6 +3,8 @@ package com.luminaread.ui;
 import com.luminaread.model.Book;
 
 import javax.swing.BorderFactory;
+import javax.swing.DefaultListCellRenderer;
+import javax.swing.JComboBox;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
@@ -33,6 +35,19 @@ public final class ModernUiFactory {
         label.putClientProperty("html.disable", Boolean.TRUE);
         label.setText(text);
         return label;
+    }
+
+    static void applyReadableComboColors(JComboBox<?> combo) {
+        combo.setRenderer(new DefaultListCellRenderer() {
+            @Override public Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
+                    int index, boolean selected, boolean hasFocus) {
+                JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, selected, hasFocus);
+                label.setOpaque(true);
+                label.setBackground(selected ? new Color(49, 67, 129) : new Color(242, 244, 249));
+                label.setForeground(selected ? Color.WHITE : new Color(25, 30, 41));
+                return label;
+            }
+        });
     }
 
     private static final Map<String, ImageIcon> COVER_CACHE = new ConcurrentHashMap<>();

@@ -174,6 +174,7 @@ public class SettingsPanel extends JPanel {
         JComboBox<String> fontCombo = new JComboBox<>(new String[]{
                 "Georgia", "Palatino", "Times New Roman", "Verdana", "Trebuchet MS", "Tahoma", "Monospaced"
         });
+        ModernUiFactory.applyReadableComboColors(fontCombo);
         fontCombo.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         fontCombo.setSelectedItem(s.getFontFamily());
         fontCombo.addActionListener(e -> {
@@ -198,6 +199,7 @@ public class SettingsPanel extends JPanel {
         JComboBox<String> lineHeightCombo = new JComboBox<>(new String[]{
                 "1.2 — плотный", "1.4 — стандартный", "1.6 — комфортный", "1.8 — свободный", "2.0 — двойной"
         });
+        ModernUiFactory.applyReadableComboColors(lineHeightCombo);
         lineHeightCombo.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         int lhIndex = (int) Math.round((s.getLineHeight() - 1.2) / 0.2);
         lineHeightCombo.setSelectedIndex(Math.max(0, Math.min(4, lhIndex)));
@@ -231,6 +233,7 @@ public class SettingsPanel extends JPanel {
         JComboBox<String> alignCombo = new JComboBox<>(new String[]{
                 "По левому краю", "По ширине"
         });
+        ModernUiFactory.applyReadableComboColors(alignCombo);
         alignCombo.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         alignCombo.setSelectedIndex(s.getTextAlignment() == ReaderSettings.TextAlignment.LEFT ? 0 : 1);
         alignCombo.addActionListener(e -> {
@@ -242,8 +245,9 @@ public class SettingsPanel extends JPanel {
         });
 
         JComboBox<String> modeCombo = new JComboBox<>(new String[]{
-                "Постранично", "Непрерывная прокрутка"
+                "Постранично", "Вертикальная прокрутка"
         });
+        ModernUiFactory.applyReadableComboColors(modeCombo);
         modeCombo.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         modeCombo.setSelectedIndex(s.getReadingMode() == ReaderSettings.ReadingMode.PAGED ? 0 : 1);
         modeCombo.addActionListener(e -> {
