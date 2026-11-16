@@ -1,6 +1,5 @@
 package com.luminaread;
 
-import com.luminaread.model.ReaderSettings;
 import com.luminaread.service.DictionaryService;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
@@ -43,11 +42,10 @@ public class LuminaReadApp {
             }
             return;
         }
-        if (storageService.getSettings().getTextAlignment() == ReaderSettings.TextAlignment.JUSTIFY) {
-            storageService.getSettings().setTextAlignment(ReaderSettings.TextAlignment.LEFT);
-            storageService.saveState();
-        }
         ensureStarterBooksExist(storageService);
+        if (java.awt.GraphicsEnvironment.isHeadless()) {
+            return;
+        }
 
         File startupFile = args != null && args.length > 0 ? new File(args[0]) : null;
 

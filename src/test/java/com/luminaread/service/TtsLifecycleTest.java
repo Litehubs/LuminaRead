@@ -9,6 +9,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TtsLifecycleTest {
+    @Test
+    void unixSpeechTreatsOptionLikeBookTextAsData() {
+        String text = "--phonout=chapter.txt";
+        assertEquals(java.util.List.of("say", "-r", "175", "--", text),
+                TtsService.buildMacProcess(text, 175).command());
+        assertEquals(java.util.List.of("espeak", "-s", "175", "--", text),
+                TtsService.buildLinuxProcess(text, 175, false).command());
+        assertEquals(java.util.List.of("spd-say", "-r", "0", "--", text),
+                TtsService.buildLinuxProcess(text, 175, true).command());
+    }
+
     @Test void missingSpeechEngineStopsPlaybackAndNotifiesCaller() throws Exception {
         TtsEngine engine = new TtsEngine() {
             @Override public ProcessBuilder buildProcess(String text, int rate) { return new ProcessBuilder("/nonexistent/luminaread-test-tts"); }

@@ -9,7 +9,7 @@ public class MacTtsEngine implements TtsEngine {
 
     @Override
     public ProcessBuilder buildProcess(String textToSpeak, int rateWpm) {
-        return new ProcessBuilder("say", "-r", String.valueOf(rateWpm), textToSpeak);
+        return new ProcessBuilder("say", "-r", String.valueOf(rateWpm), "--", textToSpeak);
     }
 
     @Override

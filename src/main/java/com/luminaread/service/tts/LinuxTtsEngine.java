@@ -38,9 +38,9 @@ public class LinuxTtsEngine implements TtsEngine {
     public ProcessBuilder buildProcess(String textToSpeak, int rateWpm, boolean forceSpd) {
         if (forceSpd) {
             int spdRate = Math.max(-100, Math.min(100, (rateWpm - 175) * 100 / 175));
-            return new ProcessBuilder("spd-say", "-r", String.valueOf(spdRate), textToSpeak);
+            return new ProcessBuilder("spd-say", "-r", String.valueOf(spdRate), "--", textToSpeak);
         } else {
-            return new ProcessBuilder("espeak", "-s", String.valueOf(rateWpm), textToSpeak);
+            return new ProcessBuilder("espeak", "-s", String.valueOf(rateWpm), "--", textToSpeak);
         }
     }
 
