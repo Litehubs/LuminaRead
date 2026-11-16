@@ -35,6 +35,13 @@ public class BookDownloader implements IBookDownloader {
     private static final Pattern ARCHIVE_FILE_NAME_PATTERN = Pattern.compile(
             "\"name\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
 
+    private static final Pattern UNSAFE_FILENAME_CHARACTERS =
+            Pattern.compile("[\\p{Cc}\\p{Cs}\\\\/:*?\"<>|]");
+    private static final Pattern WINDOWS_DEVICE_NAME =
+            Pattern.compile("CON|PRN|AUX|NUL|CONIN\\$|CONOUT\\$|(?:COM|LPT)[1-9¹²³]",
+                    Pattern.CASE_INSENSITIVE);
+    private static final int MAX_TITLE_FILENAME_LENGTH = 80;
+
     private final HttpClient httpClient;
     private final Runnable updateListener;
     private final long maxDownloadBytes;
@@ -111,13 +118,7 @@ public class BookDownloader implements IBookDownloader {
             String ext = determineExtension(effectiveUrl, task.getFormat(), contentType,
                     response.headers().firstValue("Content-Disposition").orElse(""));
 
-            String safeBaseName = task.getTitle().replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-            if (safeBaseName.length() > 80) {
-                safeBaseName = safeBaseName.substring(0, 80).trim();
-            }
-            if (safeBaseName.isEmpty()) {
-                safeBaseName = "book";
-            }
+            String safeBaseName = portableBaseName(task.getTitle());
 
             if (destinationDir != null) {
                 Files.createDirectories(destinationDir);
@@ -194,6 +195,21 @@ public class BookDownloader implements IBookDownloader {
         } finally {
             if (temporaryFile != null) Files.deleteIfExists(temporaryFile);
         }
+    }
+
+    private static String portableBaseName(String title) {
+        String name = UNSAFE_FILENAME_CHARACTERS.matcher(title).replaceAll("_").strip();
+        if (name.length() > MAX_TITLE_FILENAME_LENGTH) {
+            int end = MAX_TITLE_FILENAME_LENGTH;
+            if (Character.isHighSurrogate(name.charAt(end - 1))) end--;
+            name = name.substring(0, end);
+        }
+        name = name.replaceFirst("[. ]+$", "");
+        if (name.isBlank()) return "book";
+
+        int firstDot = name.indexOf('.');
+        String stem = firstDot < 0 ? name : name.substring(0, firstDot).stripTrailing();
+        return WINDOWS_DEVICE_NAME.matcher(stem).matches() ? "_" + name : name;
     }
 
     public File decompressGzipIfNeeded(File file) throws Exception {
