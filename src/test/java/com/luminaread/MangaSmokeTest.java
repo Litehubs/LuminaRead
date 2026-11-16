@@ -1,8 +1,8 @@
 package com.luminaread;
 
 import com.luminaread.service.MangaService;
-import com.luminaread.service.MangaService.MangaItem;
-import com.luminaread.service.MangaService.MangaChapter;
+import com.luminaread.model.manga.MangaItem;
+import com.luminaread.model.manga.MangaChapter;
 import java.awt.image.BufferedImage;
 import java.util.*;
 

@@ -1,18 +1,17 @@
 package com.luminaread.ui;
 
-import com.luminaread.service.YandexAuthService;
+import com.luminaread.model.manga.MangaChapter;
+import com.luminaread.model.manga.MangaItem;
+import com.luminaread.model.manga.MangaSearchResult;
+import com.luminaread.service.IMangaService;
 import com.luminaread.service.YandexAuthService.YandexUser;
-import com.luminaread.service.MangaService;
-import com.luminaread.service.MangaService.MangaChapter;
-import com.luminaread.service.MangaService.MangaItem;
+import com.luminaread.service.YandexAuthService;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -23,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public class MangaPanel extends JPanel {
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger(MangaPanel.class.getName());
 
     public static final int ALIGN_LEFT = 0;
     public static final int ALIGN_CENTER = 1;
@@ -31,18 +31,19 @@ public class MangaPanel extends JPanel {
     public static final int MODE_SCROLL = 0;
     public static final int MODE_PAGED = 1;
 
-    private final MangaService mangaService;
+    private final IMangaService mangaService;
+    private final YandexAuthService yandexService = YandexAuthService.getInstance();
+    private final MangaPageLoader pageLoader;
+    private final AtomicInteger currentLoadToken = new AtomicInteger(0);
+    private final PanelWorkers workers = new PanelWorkers(6);
+    private volatile boolean disposed;
+    private final Consumer<YandexUser> authListener = user -> SwingUtilities.invokeLater(() -> {
+        if (!disposed) updateAuthButtonState();
+    });
+    private final LatestSwingRequest<MangaSearchResult> mangaSearch = new LatestSwingRequest<>();
     private final LatestSwingRequest<ImageIcon> detailCoverRequest = new LatestSwingRequest<>();
     private final LatestSwingRequest<List<MangaChapter>> detailChaptersRequest = new LatestSwingRequest<>();
     private final LatestSwingRequest<String> detailDescriptionRequest = new LatestSwingRequest<>();
-    private final LatestSwingRequest<MangaService.SearchResult> catalogRequest = new LatestSwingRequest<>();
-    private final YandexAuthService yandexService = YandexAuthService.getInstance();
-    private final PanelWorkers workers = new PanelWorkers(6);
-    private volatile boolean disposed;
-    private final Consumer<YandexUser> yandexListener = user -> SwingUtilities.invokeLater(() -> {
-        if (!disposed) updateAuthButtonState();
-    });
-    private final AtomicInteger currentLoadToken = new AtomicInteger(0);
     private final Consumer<Boolean> onToggleSidebar;
 
     private final CardLayout viewLayout = new CardLayout();
@@ -66,29 +67,29 @@ public class MangaPanel extends JPanel {
     private final JComboBox<String> sourceSelector = new JComboBox<>(new String[]{
             "Все источники", "MangaLib (RU)", "Remanga (RU)", "MangaDex (EN/RU)"
     });
+    private final JButton clearHistoryButton = new JButton("Очистить историю");
     private final JComboBox<String> categoryTabs = new JComboBox<>(new String[]{
             "🔥 Популярное сейчас", "⭐ Избранная манга", "🕒 История чтения манги"
     });
     private final SmoothScrollUtil.ResponsiveListPanel gridContainer = new SmoothScrollUtil.ResponsiveListPanel(new GridLayout(0, 2, 14, 14));
     private final JLabel statusLabel = new JLabel("Готово к поиску манги и манхвы");
-    private final JButton authBtn = new JButton("Войти через Яндекс ID");
+    private final JButton authBtn = new JButton("🟡 Войти через Яндекс ID");
 
     private MangaItem currentManga;
     private final JLabel detailTitle = new JLabel();
     private final JLabel detailBadges = new JLabel();
     private final JTextArea detailDesc = new JTextArea();
     private final JLabel detailCover = new JLabel();
-    private final JLabel chapterStatus = new JLabel();
     private final JButton favToggleBtn = new JButton("☆ В избранное манги");
     private final DefaultListModel<MangaChapter> chapterListModel = new DefaultListModel<>();
     private final JList<MangaChapter> chapterJList = new JList<>(chapterListModel);
+    private final JLabel chapterStatus = new JLabel(" ");
     private final JComboBox<String> languageCombo = new JComboBox<>();
     private final JButton sortOrderBtn = new JButton("Порядок: 1 → N");
-    private final List<String> availableLangs = new ArrayList<>();
-    private boolean chaptersAscending = true;
+    private final MangaChapterList chapters = new MangaChapterList();
     private boolean updatingLanguage = false;
 
-    private final CenteredScrollablePanel readerCanvasPanel = new CenteredScrollablePanel();
+    private final MangaReaderCanvas readerCanvasPanel = new MangaReaderCanvas();
     private JScrollPane readerScrollPane;
     private final JLabel readerTitleLabel = new JLabel("Чтение");
 
@@ -107,28 +108,20 @@ public class MangaPanel extends JPanel {
     private final JButton prevChapterBtn = new JButton("⏮");
     private final JButton nextChapterBtn = new JButton("⏭");
 
+    private boolean chapterLoading;
     private List<String> currentPages = new ArrayList<>();
-    private List<MangaChapter> currentChapterList = new ArrayList<>();
-    private List<MangaChapter> allChapters = new ArrayList<>();
-    private String currentLanguage = "ru";
     private int currentChapterIndex = 0;
     private int currentPageIndex = 0;
     private boolean isZenActive = false;
-    private Timer autoScrollTimer;
+    private AutoScrollController autoScroll;
 
     private ThemePalette currentTheme = ThemePalette.byId("NIGHT_AMOLED");
 
-    public MangaPanel() {
-        this(null);
-    }
-
-    public MangaPanel(Consumer<Boolean> onToggleSidebar) {
-        this(onToggleSidebar, new MangaService(), true);
-    }
-
-    MangaPanel(Consumer<Boolean> onToggleSidebar, MangaService mangaService, boolean initialSearch) {
+    MangaPanel(Consumer<Boolean> onToggleSidebar, IMangaService mangaService, boolean initialSearch) {
         this.onToggleSidebar = onToggleSidebar;
-        this.mangaService = mangaService;
+        this.mangaService = java.util.Objects.requireNonNull(mangaService);
+        this.pageLoader = new MangaPageLoader(workers, mangaService::loadImageCached,
+                token -> !disposed && token == currentLoadToken.get());
         setLayout(new BorderLayout());
         setBackground(new Color(20, 22, 29));
 
@@ -140,7 +133,7 @@ public class MangaPanel extends JPanel {
 
         add(mainContainer, BorderLayout.CENTER);
 
-        yandexService.addAuthListener(yandexListener);
+        yandexService.addAuthListener(authListener);
         updateAuthButtonState();
 
         if (initialSearch) performSearch("");
@@ -149,12 +142,12 @@ public class MangaPanel extends JPanel {
     public void disposeResources() {
         if (disposed) return;
         disposed = true;
-        yandexService.removeAuthListener(yandexListener);
-        catalogRequest.cancel();
+        yandexService.removeAuthListener(authListener);
+        mangaSearch.cancel();
         cancelDetailRequests();
         currentLoadToken.incrementAndGet();
         workers.close();
-        stopAutoScroll();
+        if (autoScroll != null) autoScroll.stop();
     }
 
     private void loadPreferences() {
@@ -190,6 +183,12 @@ public class MangaPanel extends JPanel {
         mangaService.saveMangaState(favoriteManga, historyManga, lastReadChapterMap, readerPrefs);
     }
 
+    private void clearHistory() {
+        if (historyManga.isEmpty() || !CatalogListControls.confirmClear(this)) return;
+        CatalogListControls.edit(this, historyManga, historyManga::clear, this::persistListState,
+                this::onCategoryChanged);
+    }
+
     private void updateAuthButtonState() {
         YandexUser ya = yandexService.getCurrentUser();
         if (ya != null && ya.isAuthenticated()) {
@@ -204,92 +203,35 @@ public class MangaPanel extends JPanel {
     }
 
     private JPanel buildExploreView() {
-        JPanel root = new JPanel(new BorderLayout(0, 14));
-        root.setBackground(new Color(20, 22, 29));
-        root.setBorder(new EmptyBorder(18, 22, 18, 22));
-
-        JPanel header = new JPanel();
-        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
-        header.setOpaque(false);
-
-        JPanel topTitleRow = new JPanel(new BorderLayout(10, 0));
-        topTitleRow.setOpaque(false);
-        topTitleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel logo = new JLabel("📖 LuminaRead — Онлайн Манга и Манхва");
-        logo.setFont(new Font("SansSerif", Font.BOLD, 20));
-        logo.setForeground(new Color(255, 138, 101));
-
-        authBtn.setFont(new Font("SansSerif", Font.BOLD, 12));
-        authBtn.setFocusPainted(false);
         authBtn.addActionListener(e -> showAuthDialog());
         updateAuthButtonState();
-
-        topTitleRow.add(logo, BorderLayout.WEST);
-        topTitleRow.add(authBtn, BorderLayout.EAST);
-
-        JPanel filterBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        filterBar.setOpaque(false);
-        filterBar.setAlignmentX(Component.LEFT_ALIGNMENT);
-        filterBar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
         categoryTabs.addActionListener(e -> onCategoryChanged());
         sourceSelector.addActionListener(e -> {
             if (categoryTabs.getSelectedIndex() == 0) performSearch(searchField.getText());
         });
-        filterBar.add(new JLabel("Раздел:") {{ setForeground(new Color(180, 185, 200)); }});
-        filterBar.add(categoryTabs);
-        filterBar.add(new JLabel("Источник:") {{ setForeground(new Color(180, 185, 200)); }});
-        filterBar.add(sourceSelector);
+        clearHistoryButton.setVisible(false);
+        clearHistoryButton.addActionListener(e -> clearHistory());
 
-        JPanel searchRow = new JPanel(new BorderLayout(10, 0));
-        searchRow.setOpaque(false);
-        searchRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        searchRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
-        searchField.setFont(new Font("SansSerif", Font.PLAIN, 15));
-        searchField.setToolTipText("Поиск манги, манхвы, маньхуа (отдельно от книг)...");
-        searchField.addActionListener(e -> {
-            if (categoryTabs.getSelectedIndex() == 0) performSearch(searchField.getText());
-            else categoryTabs.setSelectedIndex(0);
-        });
+        searchField.setToolTipText("Поиск манги, манхвы и маньхуа");
+        searchField.addActionListener(e -> startSearchFromField());
+        JButton find = new JButton("🔍 Найти мангу / манхву");
+        find.setBackground(new Color(92, 107, 192));
+        find.addActionListener(e -> startSearchFromField());
 
-        JButton findBtn = new JButton("🔍 Найти мангу / манхву");
-        findBtn.setFont(new Font("SansSerif", Font.BOLD, 13));
-        findBtn.setBackground(new Color(92, 107, 192));
-        findBtn.setForeground(Color.WHITE);
-        findBtn.setFocusPainted(false);
-        findBtn.addActionListener(e -> {
-            if (categoryTabs.getSelectedIndex() == 0) performSearch(searchField.getText());
-            else categoryTabs.setSelectedIndex(0);
-        });
+        JPanel filters = CatalogExploreView.filters(categoryTabs, sourceSelector, clearHistoryButton);
+        return new CatalogExploreView("📖 LuminaRead — Манга и манхва", new Color(255, 138, 101),
+                authBtn, filters, searchField, find, gridContainer, statusLabel);
+    }
 
-        searchRow.add(searchField, BorderLayout.CENTER);
-        searchRow.add(findBtn, BorderLayout.EAST);
-
-        header.add(topTitleRow);
-        header.add(Box.createVerticalStrut(8));
-        header.add(filterBar);
-        header.add(Box.createVerticalStrut(8));
-        header.add(searchRow);
-
-        gridContainer.setBackground(new Color(20, 22, 29));
-        JScrollPane scroll = new JScrollPane(gridContainer);
-        scroll.setBorder(BorderFactory.createEmptyBorder());
-        scroll.getViewport().setBackground(new Color(20, 22, 29));
-        scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-        SmoothScrollUtil.enhance(scroll);
-
-        statusLabel.setForeground(new Color(160, 168, 185));
-        statusLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
-
-        root.add(header, BorderLayout.NORTH);
-        root.add(scroll, BorderLayout.CENTER);
-        root.add(statusLabel, BorderLayout.SOUTH);
-        return root;
+    private void startSearchFromField() {
+        if (categoryTabs.getSelectedIndex() == 0) performSearch(searchField.getText());
+        else categoryTabs.setSelectedIndex(0);
     }
 
     private void onCategoryChanged() {
-        catalogRequest.cancel();
+        mangaSearch.cancel();
         int idx = categoryTabs.getSelectedIndex();
+        clearHistoryButton.setVisible(idx == 2 && !historyManga.isEmpty());
         if (idx == 0) {
             performSearch(searchField.getText());
         } else if (idx == 1) {
@@ -300,9 +242,6 @@ public class MangaPanel extends JPanel {
     }
 
     private JPanel buildDetailsView() {
-        detailTitle.putClientProperty("html.disable", Boolean.TRUE);
-        detailBadges.putClientProperty("html.disable", Boolean.TRUE);
-        chapterStatus.setForeground(new Color(225, 170, 130));
         JPanel panel = new JPanel(new BorderLayout(16, 16));
         panel.setBackground(new Color(20, 22, 29));
         panel.setBorder(new EmptyBorder(18, 22, 18, 22));
@@ -334,109 +273,36 @@ public class MangaPanel extends JPanel {
         topNav.add(backBtn, BorderLayout.WEST);
         topNav.add(favToggleBtn, BorderLayout.EAST);
 
-        JPanel infoCard = new JPanel(new BorderLayout(18, 0));
-        infoCard.setBackground(new Color(30, 33, 44));
-        infoCard.setBorder(new EmptyBorder(16, 16, 16, 16));
-
-        detailCover.setPreferredSize(new Dimension(145, 205));
-        detailCover.setHorizontalAlignment(SwingConstants.CENTER);
-        detailCover.setForeground(Color.GRAY);
-
-        JPanel metaBox = new JPanel(new BorderLayout(0, 8));
-        metaBox.setOpaque(false);
-        detailTitle.setFont(new Font("SansSerif", Font.BOLD, 19));
-        detailTitle.setForeground(Color.WHITE);
-        detailBadges.setFont(new Font("SansSerif", Font.BOLD, 13));
-        detailBadges.setForeground(new Color(255, 167, 38));
-
-        detailDesc.setEditable(false);
-        detailDesc.setLineWrap(true);
-        detailDesc.setWrapStyleWord(true);
-        detailDesc.setOpaque(false);
-        detailDesc.setForeground(new Color(205, 210, 222));
-        detailDesc.setFont(new Font("SansSerif", Font.PLAIN, 13));
-
-        JPanel titleHeader = new JPanel(new GridLayout(2, 1, 0, 4));
-        titleHeader.setOpaque(false);
-        titleHeader.add(detailTitle);
-        titleHeader.add(detailBadges);
-
-        metaBox.add(titleHeader, BorderLayout.NORTH);
-        metaBox.add(new JScrollPane(detailDesc) {{
-            setBorder(null);
-            setOpaque(false);
-            getViewport().setOpaque(false);
-            SmoothScrollUtil.enhance(this);
-        }}, BorderLayout.CENTER);
-
-        JPanel coverBox = new JPanel();
-        coverBox.setLayout(new BoxLayout(coverBox, BoxLayout.Y_AXIS));
-        coverBox.setOpaque(false);
-        detailCover.setAlignmentX(Component.LEFT_ALIGNMENT);
-        coverBox.add(detailCover);
+        TitleDetailsCard infoCard = new TitleDetailsCard(detailCover, detailTitle, detailBadges,
+                detailDesc, new Color(255, 167, 38));
 
         JLabel langLabel = new JLabel("Язык глав:");
         langLabel.setForeground(new Color(180, 185, 200));
         langLabel.setFont(new Font("SansSerif", Font.PLAIN, 12));
         langLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        coverBox.add(Box.createVerticalStrut(10));
-        coverBox.add(langLabel);
-        coverBox.add(Box.createVerticalStrut(4));
+        infoCard.addCoverControl(Box.createVerticalStrut(10));
+        infoCard.addCoverControl(langLabel);
+        infoCard.addCoverControl(Box.createVerticalStrut(4));
 
         languageCombo.setMaximumSize(new Dimension(150, 28));
         languageCombo.setAlignmentX(Component.LEFT_ALIGNMENT);
         languageCombo.setEnabled(false);
         languageCombo.addActionListener(e -> onLanguageChanged());
-        coverBox.add(languageCombo);
+        infoCard.addCoverControl(languageCombo);
 
-        coverBox.add(Box.createVerticalStrut(8));
+        infoCard.addCoverControl(Box.createVerticalStrut(8));
         sortOrderBtn.setAlignmentX(Component.LEFT_ALIGNMENT);
         sortOrderBtn.setMaximumSize(new Dimension(150, 28));
         sortOrderBtn.setFocusPainted(false);
         sortOrderBtn.addActionListener(e -> toggleChapterSortOrder());
-        coverBox.add(sortOrderBtn);
+        infoCard.addCoverControl(sortOrderBtn);
 
-        infoCard.add(coverBox, BorderLayout.WEST);
-        infoCard.add(metaBox, BorderLayout.CENTER);
-
-        chapterJList.setBackground(new Color(28, 30, 40));
-        chapterJList.setForeground(Color.WHITE);
-        chapterJList.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        chapterJList.setFixedCellHeight(38);
-        chapterJList.setSelectionBackground(new Color(92, 107, 192));
-
-        JButton startReadBtn = new JButton("▶ Читать выбранную главу");
-        startReadBtn.setFont(new Font("SansSerif", Font.BOLD, 14));
-        startReadBtn.setBackground(new Color(67, 160, 71));
-        startReadBtn.setForeground(Color.WHITE);
-        startReadBtn.setFocusPainted(false);
-        startReadBtn.addActionListener(e -> {
-            int idx = chapterJList.getSelectedIndex();
-            if (idx >= 0) openChapterAtIndex(idx);
-            else if (chapterListModel.getSize() > 0) openChapterAtIndex(0);
-        });
-
-        chapterJList.addMouseListener(new MouseAdapter() {
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2) {
-                    int idx = chapterJList.locationToIndex(e.getPoint());
-                    if (idx >= 0) openChapterAtIndex(idx);
-                }
-            }
-        });
-
-        JScrollPane chScroll = new JScrollPane(chapterJList);
-        SmoothScrollUtil.enhance(chScroll);
-
+        readerTitleLabel.putClientProperty("html.disable", Boolean.TRUE);
         JPanel body = new JPanel(new BorderLayout(0, 12));
         body.setOpaque(false);
         body.add(infoCard, BorderLayout.NORTH);
-        JPanel chapterArea = new JPanel(new BorderLayout(0, 6));
-        chapterArea.setOpaque(false);
-        chapterArea.add(chapterStatus, BorderLayout.NORTH);
-        chapterArea.add(chScroll, BorderLayout.CENTER);
-        body.add(chapterArea, BorderLayout.CENTER);
-        body.add(startReadBtn, BorderLayout.SOUTH);
+        body.add(new TitleChapterBrowser(chapterJList, chapterStatus, null,
+                new Color(92, 107, 192), this::openChapterAtIndex), BorderLayout.CENTER);
 
         panel.add(topNav, BorderLayout.NORTH);
         panel.add(body, BorderLayout.CENTER);
@@ -444,14 +310,9 @@ public class MangaPanel extends JPanel {
     }
 
     private void toggleChapterSortOrder() {
-        chaptersAscending = !chaptersAscending;
-        sortOrderBtn.setText(chaptersAscending ? "Порядок: 1 → N" : "Порядок: N → 1");
-        Collections.reverse(currentChapterList);
-        chapterListModel.clear();
-        for (MangaChapter ch : currentChapterList) {
-            chapterListModel.addElement(ch);
-        }
-        if (!currentChapterList.isEmpty()) chapterJList.setSelectedIndex(0);
+        chapters.toggleOrder();
+        sortOrderBtn.setText(chapters.isAscending() ? "Порядок: 1 → N" : "Порядок: N → 1");
+        applyLanguageFilter();
     }
 
     private JPanel buildReaderView() {
@@ -490,6 +351,7 @@ public class MangaPanel extends JPanel {
         backBtn.addActionListener(e -> {
             stopAutoScroll();
             currentLoadToken.incrementAndGet();
+            chapterLoading = false;
             if (onToggleSidebar != null) onToggleSidebar.accept(true);
             viewLayout.show(mainContainer, "DETAILS");
         });
@@ -684,7 +546,7 @@ public class MangaPanel extends JPanel {
     }
 
     private void toggleAutoScroll() {
-        if (autoScrollTimer != null && autoScrollTimer.isRunning()) {
+        if (autoScroll != null && autoScroll.isRunning()) {
             stopAutoScroll();
         } else {
             startAutoScroll();
@@ -692,31 +554,20 @@ public class MangaPanel extends JPanel {
     }
 
     private void startAutoScroll() {
-        if (autoScrollTimer != null) autoScrollTimer.stop();
+        if (readerScrollPane == null) return;
+        if (autoScroll == null) {
+            autoScroll = new AutoScrollController(readerScrollPane, () -> autoScrollSpeed, 30,
+                    false, position -> {}, this::stopAutoScroll);
+        }
         autoScrollBtn.setText("⏸ Стоп");
         autoScrollBtn.setBackground(new Color(229, 57, 53));
         autoScrollBtn.setForeground(Color.WHITE);
 
-        autoScrollTimer = new Timer(30, e -> {
-            if (readerScrollPane == null) return;
-            JScrollBar vbar = readerScrollPane.getVerticalScrollBar();
-            int max = vbar.getMaximum() - vbar.getVisibleAmount();
-            int cur = vbar.getValue();
-            if (cur >= max - 2) {
-                stopAutoScroll();
-                return;
-            }
-            int step = Math.max(1, (int) Math.round(autoScrollSpeed * 30.0 / 1000.0));
-            vbar.setValue(Math.min(max, cur + step));
-        });
-        autoScrollTimer.start();
+        autoScroll.start();
     }
 
     void stopAutoScroll() {
-        if (autoScrollTimer != null) {
-            autoScrollTimer.stop();
-            autoScrollTimer = null;
-        }
+        if (autoScroll != null) autoScroll.stop();
         autoScrollBtn.setText("▶ Автоскролл");
         autoScrollBtn.setBackground(new Color(60, 64, 80));
         autoScrollBtn.setForeground(Color.WHITE);
@@ -764,238 +615,20 @@ public class MangaPanel extends JPanel {
     }
 
     private void showMiniSettingsDialog() {
-        Window parentWin = SwingUtilities.getWindowAncestor(this);
-        JDialog dlg = new JDialog(parentWin instanceof Frame ? (Frame) parentWin : null, "⚙️ Настройки чтения манги", Dialog.ModalityType.APPLICATION_MODAL);
-        dlg.setLayout(new BorderLayout());
-        dlg.setResizable(false);
-
-        JPanel content = new JPanel();
-        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
-        content.setBackground(new Color(28, 30, 40));
-        content.setBorder(new EmptyBorder(18, 22, 18, 22));
-
-        JLabel modeLbl = new JLabel("1. Режим чтения манги:");
-        modeLbl.setFont(new Font("SansSerif", Font.BOLD, 13));
-        modeLbl.setForeground(Color.WHITE);
-        modeLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JPanel modeBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
-        modeBar.setOpaque(false);
-        modeBar.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JRadioButton rbScroll = new JRadioButton("📜 Лента (Webtoon с автоскроллом)", readingMode == MODE_SCROLL);
-        JRadioButton rbPaged = new JRadioButton("📖 Постранично (манга ←/→)", readingMode == MODE_PAGED);
-        for (JRadioButton rb : new JRadioButton[]{rbScroll, rbPaged}) {
-            rb.setOpaque(false);
-            rb.setForeground(new Color(220, 225, 235));
-            rb.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        }
-        ButtonGroup bgMode = new ButtonGroup();
-        bgMode.add(rbScroll); bgMode.add(rbPaged);
-        rbScroll.addActionListener(e -> setReadingMode(MODE_SCROLL));
-        rbPaged.addActionListener(e -> setReadingMode(MODE_PAGED));
-        modeBar.add(rbScroll);
-        modeBar.add(rbPaged);
-
-        JLabel alignLbl = new JLabel("2. Положение страницы на экране:");
-        alignLbl.setFont(new Font("SansSerif", Font.BOLD, 13));
-        alignLbl.setForeground(Color.WHITE);
-        alignLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JPanel alignBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
-        alignBar.setOpaque(false);
-        alignBar.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JRadioButton rbLeft = new JRadioButton("Слева", alignmentMode == ALIGN_LEFT);
-        JRadioButton rbCenter = new JRadioButton("По центру (Рекомендуется)", alignmentMode == ALIGN_CENTER);
-        JRadioButton rbFit = new JRadioButton("По ширине окна", alignmentMode == ALIGN_FIT_WIDTH);
-        for (JRadioButton rb : new JRadioButton[]{rbLeft, rbCenter, rbFit}) {
-            rb.setOpaque(false);
-            rb.setForeground(new Color(220, 225, 235));
-            rb.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        }
-        ButtonGroup bgAlign = new ButtonGroup();
-        bgAlign.add(rbLeft); bgAlign.add(rbCenter); bgAlign.add(rbFit);
-        rbLeft.addActionListener(e -> { alignmentMode = ALIGN_LEFT; renderReaderPages(); savePreferences(); });
-        rbCenter.addActionListener(e -> { alignmentMode = ALIGN_CENTER; renderReaderPages(); savePreferences(); });
-        rbFit.addActionListener(e -> { alignmentMode = ALIGN_FIT_WIDTH; renderReaderPages(); savePreferences(); });
-
-        alignBar.add(rbLeft);
-        alignBar.add(rbCenter);
-        alignBar.add(rbFit);
-
-        JLabel widthLbl = new JLabel("3. Ширина страницы: " + zoomWidth + " px");
-        widthLbl.setFont(new Font("SansSerif", Font.BOLD, 13));
-        widthLbl.setForeground(Color.WHITE);
-        widthLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JSlider widthSlider = new JSlider(500, 1600, zoomWidth);
-        widthSlider.setOpaque(false);
-        widthSlider.setAlignmentX(Component.LEFT_ALIGNMENT);
-        widthSlider.setMaximumSize(new Dimension(460, 30));
-        widthSlider.addChangeListener(e -> {
-            zoomWidth = widthSlider.getValue();
-            widthLbl.setText("3. Ширина страницы: " + zoomWidth + " px");
-            if (alignmentMode == ALIGN_FIT_WIDTH) {
-                alignmentMode = ALIGN_CENTER;
-                rbCenter.setSelected(true);
-            }
-            renderReaderPages();
-            savePreferences();
-        });
-
-        JPanel presetBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        presetBar.setOpaque(false);
-        presetBar.setAlignmentX(Component.LEFT_ALIGNMENT);
-        int[] presets = {700, 860, 1050, 1300};
-        for (int p : presets) {
-            JButton pBtn = new JButton(p + " px");
-            pBtn.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            pBtn.setFocusPainted(false);
-            pBtn.addActionListener(ev -> {
-                zoomWidth = p;
-                widthSlider.setValue(p);
-                alignmentMode = ALIGN_CENTER;
-                rbCenter.setSelected(true);
-                renderReaderPages();
-                savePreferences();
-            });
-            presetBar.add(pBtn);
-        }
-
-        JLabel gapLbl = new JLabel("4. Отступ между сканами в ленте:");
-        gapLbl.setFont(new Font("SansSerif", Font.BOLD, 13));
-        gapLbl.setForeground(Color.WHITE);
-        gapLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JPanel gapBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
-        gapBar.setOpaque(false);
-        gapBar.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JRadioButton gap0 = new JRadioButton("0 px (Бесшовный вебтун)", pageGap == 0);
-        JRadioButton gap8 = new JRadioButton("8 px", pageGap == 8);
-        JRadioButton gap16 = new JRadioButton("16 px", pageGap == 16);
-        for (JRadioButton rb : new JRadioButton[]{gap0, gap8, gap16}) {
-            rb.setOpaque(false);
-            rb.setForeground(new Color(220, 225, 235));
-            rb.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        }
-        ButtonGroup bgGap = new ButtonGroup();
-        bgGap.add(gap0); bgGap.add(gap8); bgGap.add(gap16);
-        gap0.addActionListener(e -> { pageGap = 0; renderReaderPages(); savePreferences(); });
-        gap8.addActionListener(e -> { pageGap = 8; renderReaderPages(); savePreferences(); });
-        gap16.addActionListener(e -> { pageGap = 16; renderReaderPages(); savePreferences(); });
-        gapBar.add(gap0); gapBar.add(gap8); gapBar.add(gap16);
-
-        JLabel speedLbl = new JLabel("5. Скорость автоскролла в ленте: " + autoScrollSpeed + " px/с");
-        speedLbl.setFont(new Font("SansSerif", Font.BOLD, 13));
-        speedLbl.setForeground(Color.WHITE);
-        speedLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JSlider speedSlider = new JSlider(15, 120, autoScrollSpeed);
-        speedSlider.setOpaque(false);
-        speedSlider.setAlignmentX(Component.LEFT_ALIGNMENT);
-        speedSlider.setMaximumSize(new Dimension(460, 30));
-        speedSlider.addChangeListener(e -> {
-            autoScrollSpeed = speedSlider.getValue();
-            speedLbl.setText("5. Скорость автоскролла в ленте: " + autoScrollSpeed + " px/с");
-            savePreferences();
-        });
-
-        int brightPct = (int) Math.round((1.0 - dimmerOpacity) * 100);
-        JLabel brightLbl = new JLabel("6. Яркость страницы: " + brightPct + "%");
-        brightLbl.setFont(new Font("SansSerif", Font.BOLD, 13));
-        brightLbl.setForeground(Color.WHITE);
-        brightLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JSlider brightSlider = new JSlider(30, 100, brightPct);
-        brightSlider.setOpaque(false);
-        brightSlider.setAlignmentX(Component.LEFT_ALIGNMENT);
-        brightSlider.setMaximumSize(new Dimension(460, 30));
-        brightSlider.addChangeListener(e -> {
-            int val = brightSlider.getValue();
-            brightLbl.setText("6. Яркость страницы: " + val + "%");
-            dimmerOpacity = (100 - val) / 100.0;
-            renderReaderPages();
-            savePreferences();
-        });
-
-        JLabel bgLbl = new JLabel("7. Цвет фона читалки:");
-        bgLbl.setFont(new Font("SansSerif", Font.BOLD, 13));
-        bgLbl.setForeground(Color.WHITE);
-        bgLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JPanel colorBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
-        colorBar.setOpaque(false);
-        colorBar.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        addBgColorOption(colorBar, "⬛ AMOLED", new Color(14, 15, 20), dlg);
-        addBgColorOption(colorBar, "■ Тёмный", new Color(28, 30, 40), dlg);
-        addBgColorOption(colorBar, "■ Сепия", new Color(42, 34, 28), dlg);
-        addBgColorOption(colorBar, "◻ Бумага", new Color(244, 238, 220), dlg);
-
-        JCheckBox zenCheck = new JCheckBox("Скрывать боковую панель приложения при чтении (Дзен-режим)", autoHideSidebar);
-        zenCheck.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        zenCheck.setForeground(new Color(220, 225, 235));
-        zenCheck.setOpaque(false);
-        zenCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
-        zenCheck.addActionListener(e -> {
-            autoHideSidebar = zenCheck.isSelected();
-            if (onToggleSidebar != null) onToggleSidebar.accept(!autoHideSidebar);
-            savePreferences();
-        });
-
-        JButton closeBtn = new JButton("✓ Готово");
-        closeBtn.setFont(new Font("SansSerif", Font.BOLD, 13));
-        closeBtn.setBackground(new Color(67, 160, 71));
-        closeBtn.setForeground(Color.WHITE);
-        closeBtn.setFocusPainted(false);
-        closeBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
-        closeBtn.addActionListener(e -> dlg.dispose());
-
-        content.add(modeLbl);
-        content.add(modeBar);
-        content.add(Box.createVerticalStrut(10));
-        content.add(alignLbl);
-        content.add(alignBar);
-        content.add(Box.createVerticalStrut(10));
-        content.add(widthLbl);
-        content.add(widthSlider);
-        content.add(presetBar);
-        content.add(Box.createVerticalStrut(10));
-        content.add(gapLbl);
-        content.add(gapBar);
-        content.add(Box.createVerticalStrut(10));
-        content.add(speedLbl);
-        content.add(speedSlider);
-        content.add(Box.createVerticalStrut(10));
-        content.add(brightLbl);
-        content.add(brightSlider);
-        content.add(Box.createVerticalStrut(10));
-        content.add(bgLbl);
-        content.add(colorBar);
-        content.add(Box.createVerticalStrut(10));
-        content.add(zenCheck);
-        content.add(Box.createVerticalStrut(16));
-        content.add(closeBtn);
-
-        dlg.add(content);
-        dlg.pack();
-        dlg.setLocationRelativeTo(this);
-        dlg.setVisible(true);
-    }
-
-    private void addBgColorOption(JPanel panel, String label, Color c, JDialog dlg) {
-        JButton btn = new JButton(label);
-        btn.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        btn.setFocusPainted(false);
-        btn.addActionListener(e -> {
-            readerBgColor = c;
-            readerCanvasPanel.setBackground(c);
-            readerScrollPane.getViewport().setBackground(c);
-            savePreferences();
-            readerCanvasPanel.repaint();
-        });
-        panel.add(btn);
+        Window parent = SwingUtilities.getWindowAncestor(this);
+        JDialog dialog = new JDialog(parent instanceof Frame ? (Frame) parent : null, "⚙️ Настройки чтения манги", Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.setLayout(new BorderLayout()); dialog.setResizable(false);
+        var state = new MangaSettingsView.State(readingMode, alignmentMode, zoomWidth, pageGap, autoScrollSpeed, dimmerOpacity, autoHideSidebar);
+        var actions = new MangaSettingsView.Actions(this::setReadingMode,
+                value -> { alignmentMode = value; renderReaderPages(); savePreferences(); },
+                (value, center) -> { zoomWidth = value; if (center || alignmentMode == ALIGN_FIT_WIDTH) alignmentMode = ALIGN_CENTER; renderReaderPages(); savePreferences(); },
+                value -> { pageGap = value; renderReaderPages(); savePreferences(); },
+                value -> { autoScrollSpeed = value; savePreferences(); },
+                value -> { dimmerOpacity = (100 - value) / 100.0; renderReaderPages(); savePreferences(); },
+                value -> { readerBgColor = value; readerCanvasPanel.setBackground(value); readerScrollPane.getViewport().setBackground(value); savePreferences(); readerCanvasPanel.repaint(); },
+                value -> { autoHideSidebar = value; if (onToggleSidebar != null) onToggleSidebar.accept(!value); savePreferences(); });
+        dialog.add(MangaSettingsView.create(state, actions, dialog::dispose));
+        dialog.pack(); dialog.setLocationRelativeTo(this); dialog.setVisible(true);
     }
 
     public void showAuthDialog() {
@@ -1038,14 +671,14 @@ public class MangaPanel extends JPanel {
         String rawSource = (String) sourceSelector.getSelectedItem();
         final String source = rawSource != null && !"Все источники".equals(rawSource) ? rawSource : "Все источники";
 
-        catalogRequest.start(() -> mangaService.searchMangaDetailed(query, source), result -> {
+        mangaSearch.start(() -> mangaService.searchMangaDetailed(query, source), result -> {
                     String message = "Найдено манги/манхвы: " + result.items().size();
                     if (!result.failedSources().isEmpty()) {
                         message += " · Не удалось загрузить: " + String.join(", ", result.failedSources());
                     }
                     renderMangaItems(result.items(), message);
                 }, error -> {
-                    java.util.logging.Logger.getLogger(MangaPanel.class.getName()).log(java.util.logging.Level.WARNING, "Ошибка поиска манги", error);
+                    LOG.log(java.util.logging.Level.WARNING, "Ошибка поиска манги", error);
                     statusLabel.setText("Не удалось выполнить поиск манги. Повторите попытку.");
                 });
     }
@@ -1061,77 +694,32 @@ public class MangaPanel extends JPanel {
     }
 
     private JPanel createMangaCard(MangaItem item) {
-        JPanel card = new JPanel(new BorderLayout(12, 0));
-        card.setBackground(new Color(31, 34, 45));
-        card.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(50, 55, 72), 1, true),
-                new EmptyBorder(10, 10, 10, 10)
-        ));
-
-        JLabel coverLbl = new JLabel("Обложка", SwingConstants.CENTER);
-        coverLbl.setPreferredSize(new Dimension(92, 132));
-        coverLbl.setOpaque(true);
-        coverLbl.setBackground(new Color(22, 24, 32));
-        coverLbl.setForeground(new Color(120, 125, 140));
-
-        if (item.coverUrl != null && !item.coverUrl.isEmpty()) {
-            workers.execute(() -> {
-                BufferedImage img = mangaService.loadImageCached(item.coverUrl);
-                if (img != null) {
-                    SwingUtilities.invokeLater(() -> {
-                        if (disposed) return;
-                        coverLbl.setText("");
-                        coverLbl.setIcon(new ImageIcon(createSmoothThumbnail(img, 92, 132)));
-                    });
-                }
-            });
-        }
-
-        JPanel right = new JPanel(new BorderLayout(0, 6));
-        right.setOpaque(false);
-
-        JLabel title = new JLabel(item.getDisplayTitle());
-        title.setFont(new Font("SansSerif", Font.BOLD, 14));
-        title.setForeground(Color.WHITE);
-
+        int section = categoryTabs.getSelectedIndex();
+        Map<String, MangaItem> savedList = section == 1 ? favoriteManga : section == 2 ? historyManga : null;
+        String removeLabel = section == 1 ? "Убрать из избранного" : "Убрать из истории";
+        Runnable remove = savedList == null ? null : () -> CatalogListControls.edit(this, savedList,
+                () -> savedList.remove(item.id), this::persistListState, this::onCategoryChanged);
         String lastRead = lastReadChapterMap.getOrDefault(item.id, "");
-        JLabel badge = new JLabel(item.source + " • " + item.rating + (lastRead.isEmpty() ? "" : " • Читаете: " + lastRead));
-        badge.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        badge.setForeground(new Color(255, 167, 38));
-
-        String cleanD = item.description != null ? item.description : "";
-        JTextArea desc = new JTextArea(cleanD.length() > 125 ? cleanD.substring(0, 125) + "..." : cleanD);
-        desc.setLineWrap(true);
-        desc.setWrapStyleWord(true);
-        desc.setEditable(false);
-        desc.setOpaque(false);
-        desc.setForeground(new Color(175, 182, 198));
-        desc.setFont(new Font("SansSerif", Font.PLAIN, 12));
-
-        JButton readBtn = new JButton("Открыть тайтл 📖");
-        readBtn.setBackground(new Color(79, 93, 175));
-        readBtn.setForeground(Color.WHITE);
-        readBtn.setFocusPainted(false);
-        readBtn.addActionListener(e -> showMangaDetails(item));
-
-        JPanel topInfo = new JPanel(new GridLayout(2, 1));
-        topInfo.setOpaque(false);
-        topInfo.add(title);
-        topInfo.add(badge);
-
-        right.add(topInfo, BorderLayout.NORTH);
-        right.add(desc, BorderLayout.CENTER);
-        right.add(readBtn, BorderLayout.SOUTH);
-
-        card.add(coverLbl, BorderLayout.WEST);
-        card.add(right, BorderLayout.CENTER);
-        return card;
+        String badge = item.source + " • " + item.rating + (lastRead.isEmpty() ? "" : " • Читаете: " + lastRead);
+        return CatalogCard.create(item.getDisplayTitle(), badge, item.description, 125,
+                new Color(255, 167, 38), "Открыть тайтл 📖", new Color(79, 93, 175), cover -> {
+                    if (item.coverUrl == null || item.coverUrl.isEmpty()) return;
+                    workers.execute(() -> {
+                        BufferedImage image = mangaService.loadImageCached(item.coverUrl);
+                        if (image != null) SwingUtilities.invokeLater(() -> {
+                            if (disposed) return;
+                            cover.setText("");
+                            cover.setIcon(new ImageIcon(createSmoothThumbnail(image, 92, 132)));
+                        });
+                    });
+                }, () -> showMangaDetails(item), removeLabel, remove);
     }
 
     private void showMangaDetails(MangaItem item) {
         if (disposed) return;
         cancelDetailRequests();
         currentLoadToken.incrementAndGet();
+        chapterLoading = false;
         currentPages = Collections.emptyList();
         this.currentManga = item;
         historyManga.put(item.id, item);
@@ -1144,10 +732,9 @@ public class MangaPanel extends JPanel {
 
         detailCover.setIcon(null);
         detailCover.setText("Загрузка...");
-        chapterStatus.setText("Загрузка глав...");
-        allChapters = Collections.emptyList();
-        currentChapterList = new ArrayList<>();
+        chapters.clear();
         chapterListModel.clear();
+        chapterStatus.setText("Загрузка глав...");
         updatingLanguage = true;
         try {
             languageCombo.removeAllItems();
@@ -1158,23 +745,18 @@ public class MangaPanel extends JPanel {
         viewLayout.show(mainContainer, "DETAILS");
 
         detailCoverRequest.start(() -> {
-            BufferedImage image = mangaService.loadImageCached(item.coverUrl);
+            var image = mangaService.loadImageCached(item.coverUrl);
             return image == null ? null : new ImageIcon(createSmoothThumbnail(image, 145, 205));
         }, this::showDetailCover, error -> {
-            reportDetailError("Не удалось загрузить обложку", error);
+            LOG.log(java.util.logging.Level.WARNING, "Не удалось загрузить обложку", error);
             showDetailCover(null);
         });
 
-        detailChaptersRequest.start(() -> List.copyOf(mangaService.fetchChapters(item)), chapters -> {
-            allChapters = chapters;
+        detailChaptersRequest.start(() -> List.copyOf(mangaService.fetchChapters(item)), loaded -> {
+            chapters.setChapters(loaded);
             buildLanguageSelector();
-            languageCombo.setEnabled(languageCombo.getItemCount() > 0);
-            applyLanguageFilter();
-            chapterStatus.setText(chapters.isEmpty() ? "Главы не найдены" : " ");
-        }, error -> {
-            reportDetailError("Не удалось загрузить главы", error);
-            chapterStatus.setText("Не удалось загрузить главы. Повторите попытку.");
-        });
+            chapterStatus.setText(loaded.isEmpty() ? "Главы не найдены" : " ");
+        }, error -> showChapterListError("мангу", error));
 
         if (item.source != null && (item.source.startsWith("MangaLib") || item.source.startsWith("Remanga"))) {
             detailDescriptionRequest.start(() -> mangaService.fetchDescription(item), full -> {
@@ -1182,7 +764,7 @@ public class MangaPanel extends JPanel {
                     detailDesc.setText(full);
                     detailDesc.setCaretPosition(0);
                 }
-            }, error -> reportDetailError("Не удалось загрузить описание", error));
+            }, error -> LOG.log(java.util.logging.Level.WARNING, "Не удалось загрузить описание манги", error));
         }
     }
 
@@ -1197,20 +779,22 @@ public class MangaPanel extends JPanel {
         detailCover.setText(icon == null ? "Обложка недоступна" : "");
     }
 
-    private void reportDetailError(String message, Throwable error) {
-        java.util.logging.Logger.getLogger(MangaPanel.class.getName())
-                .log(java.util.logging.Level.WARNING, message, error);
+    private void showChapterListError(String titleType, Throwable error) {
+        LOG.log(java.util.logging.Level.WARNING, "Ошибка загрузки списка глав", error);
+        chapterStatus.setText("Не удалось загрузить главы. Попробуйте открыть " + titleType + " снова.");
     }
 
     private void openChapterAtIndex(int idx) {
-        if (disposed) return;
-        if (currentChapterList == null || idx < 0 || idx >= currentChapterList.size()) return;
+        if (idx < 0 || idx >= chapters.visible().size()) return;
         currentChapterIndex = idx;
         final int targetInitialPage = currentPageIndex == -1 ? -1 : 0;
         currentPageIndex = 0;
         final int token = currentLoadToken.incrementAndGet();
+        chapterLoading = true;
+        currentPages = Collections.emptyList();
+        pageCounterLabel.setText("");
 
-        MangaChapter ch = currentChapterList.get(idx);
+        MangaChapter ch = chapters.visible().get(idx);
         if (autoHideSidebar && onToggleSidebar != null) {
             onToggleSidebar.accept(false);
             isZenActive = true;
@@ -1232,42 +816,27 @@ public class MangaPanel extends JPanel {
 
         viewLayout.show(mainContainer, "READER");
 
-        workers.start(new SwingWorker<List<String>, Void>() {
-            @Override
-            protected List<String> doInBackground() {
-                return mangaService.fetchPageUrls(ch);
+        workers.submit(() -> token == currentLoadToken.get(), () -> mangaService.fetchPageUrls(ch), loaded -> {
+            chapterLoading = false;
+            currentPages = loaded == null ? Collections.emptyList() : loaded;
+            if (currentManga != null && !currentPages.isEmpty()) {
+                lastReadChapterMap.put(currentManga.id, "Гл. " + ch.number);
+                savePreferences();
             }
-
-            @Override
-            protected void done() {
-                if (disposed) return;
-                if (token != currentLoadToken.get()) return;
-                try {
-                    currentPages = get();
-                    if (currentManga != null && currentPages != null && !currentPages.isEmpty()) {
-                        lastReadChapterMap.put(currentManga.id, "Гл. " + ch.number);
-                        savePreferences();
-                    }
-                    if (targetInitialPage == -1 && currentPages != null && !currentPages.isEmpty()) {
-                        currentPageIndex = Math.max(0, currentPages.size() - 1);
-                    } else {
-                        currentPageIndex = 0;
-                    }
-                    renderReaderPages();
-                } catch (Exception ex) {
-                    reportDetailError("Не удалось загрузить страницы главы", ex);
-                    currentPages = Collections.emptyList();
-                    currentPageIndex = 0;
-                    renderReaderPages();
-                }
-            }
+            currentPageIndex = targetInitialPage == -1 ? Math.max(0, currentPages.size() - 1) : 0;
+            renderReaderPages();
+        }, error -> {
+            LOG.log(java.util.logging.Level.WARNING, "Ошибка загрузки страниц главы", error);
+            chapterLoading = false;
+            currentPages = Collections.emptyList();
+            renderReaderPages();
         });
     }
 
     private void goChapter(int dir) {
-        if (currentChapterList == null || currentChapterList.isEmpty()) return;
+        if (chapters.visible().isEmpty()) return;
         int nextCh = currentChapterIndex + dir;
-        if (nextCh >= 0 && nextCh < currentChapterList.size()) {
+        if (nextCh >= 0 && nextCh < chapters.visible().size()) {
             openChapterAtIndex(nextCh);
         }
     }
@@ -1276,27 +845,19 @@ public class MangaPanel extends JPanel {
         if (updatingLanguage) return;
         if (languageCombo.getItemCount() == 0) return;
         int idx = languageCombo.getSelectedIndex();
-        if (idx >= 0 && idx < availableLangs.size()) {
-            currentLanguage = availableLangs.get(idx);
+        if (idx >= 0 && idx < chapters.languages().size()) {
+            chapters.selectLanguage(chapters.languages().get(idx));
             applyLanguageFilter();
         }
     }
 
     private void buildLanguageSelector() {
-        boolean hasEn = false, hasRu = false;
-        for (MangaChapter ch : allChapters) {
-            if ("en".equalsIgnoreCase(ch.language)) hasEn = true;
-            if ("ru".equalsIgnoreCase(ch.language)) hasRu = true;
-        }
         updatingLanguage = true;
         try {
-            availableLangs.clear();
             languageCombo.removeAllItems();
-            if (hasRu) { languageCombo.addItem("🇷🇺 Русский"); availableLangs.add("ru"); }
-            if (hasEn) { languageCombo.addItem("🇬🇧 English"); availableLangs.add("en"); }
-            if (hasRu) currentLanguage = "ru";
-            else if (hasEn) currentLanguage = "en";
-            else currentLanguage = "";
+            for (String language : chapters.languages()) {
+                languageCombo.addItem("ru".equals(language) ? "🇷🇺 Русский" : "🇬🇧 English");
+            }
             if (languageCombo.getItemCount() > 0) {
                 languageCombo.setSelectedIndex(0);
                 languageCombo.setEnabled(true);
@@ -1310,26 +871,17 @@ public class MangaPanel extends JPanel {
     }
 
     private void applyLanguageFilter() {
-        currentChapterList = new ArrayList<>();
-        for (MangaChapter ch : allChapters) {
-            if (currentLanguage == null || currentLanguage.isEmpty() || ch.language.equalsIgnoreCase(currentLanguage)) {
-                currentChapterList.add(ch);
-            }
-        }
-        if (!chaptersAscending) {
-            Collections.reverse(currentChapterList);
-        }
         chapterListModel.clear();
-        for (MangaChapter ch : currentChapterList) {
+        for (MangaChapter ch : chapters.visible()) {
             chapterListModel.addElement(ch);
         }
-        if (!currentChapterList.isEmpty()) {
+        if (!chapters.visible().isEmpty()) {
             chapterJList.setSelectedIndex(0);
         }
     }
 
     private void renderReaderPages() {
-        if (disposed) return;
+        if (disposed || chapterLoading) return;
         readerCanvasPanel.removeAll();
         readerCanvasPanel.setBackground(readerBgColor);
         readerScrollPane.getViewport().setBackground(readerBgColor);
@@ -1403,7 +955,6 @@ public class MangaPanel extends JPanel {
         }
 
         SwingUtilities.invokeLater(() -> {
-            if (disposed) return;
             if (readerScrollPane != null) {
                 readerScrollPane.getVerticalScrollBar().setValue(0);
                 updateScrollProgress();
@@ -1414,7 +965,7 @@ public class MangaPanel extends JPanel {
     }
 
     private void addFastPageCanvas(String url, int pageNum, int targetWidth, boolean clickToTurn, int token) {
-        PageImagePanel pagePanel = new PageImagePanel(
+        MangaPageView pagePanel = new MangaPageView(
                 pageNum,
                 targetWidth,
                 alignmentMode,
@@ -1423,179 +974,26 @@ public class MangaPanel extends JPanel {
                 clickToTurn,
                 () -> navigateReader(-1),
                 () -> navigateReader(1),
-                () -> reloadSinglePage(url, pageNum, targetWidth, token)
+                page -> reloadSinglePage(page, url, pageNum, targetWidth, token)
         );
         readerCanvasPanel.add(pagePanel);
 
-        workers.execute(() -> {
-            if (token != currentLoadToken.get()) return;
-            BufferedImage img = mangaService.loadImageCached(url);
-            if (token != currentLoadToken.get()) return;
-            SwingUtilities.invokeLater(() -> {
-                if (disposed) return;
-                if (token != currentLoadToken.get()) return;
-                if (img != null) {
-                    pagePanel.setImage(img, targetWidth, alignmentMode, dimmerOpacity, pageGap);
-                    readerCanvasPanel.revalidate();
-                } else {
-                    pagePanel.setError("Не удалось загрузить страницу " + pageNum);
-                }
-            });
-        });
+        loadPage(pagePanel, url, pageNum, targetWidth, token);
     }
 
-    private void reloadSinglePage(String url, int pageNum, int targetWidth, int token) {
-        workers.execute(() -> {
-            BufferedImage img = mangaService.loadImageCached(url);
-            if (token != currentLoadToken.get()) return;
-            SwingUtilities.invokeLater(() -> {
-                if (disposed) return;
-                if (token != currentLoadToken.get()) return;
-                renderReaderPages();
-            });
-        });
+    private void reloadSinglePage(MangaPageView page, String url, int pageNum, int targetWidth, int token) {
+        loadPage(page, url, pageNum, targetWidth, token);
     }
 
-    private static class CenteredScrollablePanel extends JPanel implements Scrollable {
-        public CenteredScrollablePanel() {
-            setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
-        }
-
-        @Override
-        public Dimension getPreferredScrollableViewportSize() {
-            return getPreferredSize();
-        }
-
-        @Override
-        public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
-            return 64;
-        }
-
-        @Override
-        public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
-            return 250;
-        }
-
-        @Override
-        public boolean getScrollableTracksViewportWidth() {
-
-            return true;
-        }
-
-        @Override
-        public boolean getScrollableTracksViewportHeight() {
-            return false;
-        }
-    }
-
-    private static class PageImagePanel extends JPanel {
-        private BufferedImage image;
-        private final int pageNumber;
-        private final JLabel statusLabel;
-        private int targetWidth;
-        private int alignmentMode;
-        private double dimmerOpacity;
-        private int pageGap;
-        private final boolean clickToTurn;
-        private final Runnable onClickLeft;
-        private final Runnable onClickRight;
-        private final Runnable onRetry;
-
-        public PageImagePanel(int pageNumber, int targetWidth, int alignmentMode, double dimmerOpacity,
-                              int pageGap, boolean clickToTurn, Runnable onClickLeft, Runnable onClickRight, Runnable onRetry) {
-            this.pageNumber = pageNumber;
-            this.targetWidth = targetWidth;
-            this.alignmentMode = alignmentMode;
-            this.dimmerOpacity = dimmerOpacity;
-            this.pageGap = pageGap;
-            this.clickToTurn = clickToTurn;
-            this.onClickLeft = onClickLeft;
-            this.onClickRight = onClickRight;
-            this.onRetry = onRetry;
-
-            setLayout(new BorderLayout());
-            setOpaque(false);
-            setAlignmentX(Component.CENTER_ALIGNMENT);
-
-            statusLabel = new JLabel("Загрузка стр. " + pageNumber + "...", SwingConstants.CENTER);
-            statusLabel.setForeground(new Color(150, 155, 175));
-            statusLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
-            setPreferredSize(new Dimension(targetWidth, 520));
-            setMaximumSize(new Dimension(Integer.MAX_VALUE, 520));
-            add(statusLabel, BorderLayout.CENTER);
-
-            addMouseListener(new MouseAdapter() {
-                @Override
-                public void mouseClicked(MouseEvent e) {
-                    if (statusLabel.isVisible() && onRetry != null && e.getClickCount() == 1) {
-                        statusLabel.setText("Повторная попытка стр. " + pageNumber + "...");
-                        onRetry.run();
-                        return;
-                    }
-                    if (clickToTurn) {
-                        if (e.getX() < getWidth() / 3) {
-                            if (onClickLeft != null) onClickLeft.run();
-                        } else {
-                            if (onClickRight != null) onClickRight.run();
-                        }
-                    }
-                }
-            });
-        }
-
-        public void setImage(BufferedImage img, int width, int align, double dimmer, int gap) {
-            this.image = img;
-            this.targetWidth = width;
-            this.alignmentMode = align;
-            this.dimmerOpacity = dimmer;
-            this.pageGap = gap;
-            statusLabel.setVisible(false);
-            if (img != null && img.getWidth() > 0) {
-                int panelW = getWidth() > 0 ? getWidth() : width;
-                int drawW = (alignmentMode == ALIGN_FIT_WIDTH) ? panelW : Math.min(panelW, width);
-                int h = (int) Math.round((double) img.getHeight() * drawW / img.getWidth());
-                int totalH = h + gap;
-                setPreferredSize(new Dimension(drawW, totalH));
-                setMaximumSize(new Dimension(Integer.MAX_VALUE, totalH));
+    private void loadPage(MangaPageView page, String url, int pageNum, int targetWidth, int token) {
+        pageLoader.load(url, token, image -> {
+            if (image != null) {
+                page.setImage(image, targetWidth, alignmentMode, dimmerOpacity, pageGap);
+                readerCanvasPanel.revalidate();
+            } else {
+                page.setError("Не удалось загрузить страницу " + pageNum);
             }
-            revalidate();
-            repaint();
-        }
-
-        public void setError(String msg) {
-            this.image = null;
-            statusLabel.setText("⚠️ " + msg + " (кликните для повтора)");
-            statusLabel.setForeground(new Color(255, 138, 101));
-            statusLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-            statusLabel.setVisible(true);
-            revalidate();
-            repaint();
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            if (image != null && image.getWidth() > 0) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-                g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
-
-                int panelW = getWidth();
-                int drawW = (alignmentMode == ALIGN_FIT_WIDTH) ? panelW : Math.min(panelW, targetWidth);
-                int drawH = (int) Math.round((double) image.getHeight() * drawW / image.getWidth());
-
-                int drawX = (alignmentMode == ALIGN_LEFT) ? 0 : Math.max(0, (panelW - drawW) / 2);
-                int drawY = 0;
-
-                g2.drawImage(image, drawX, drawY, drawW, drawH, null);
-
-                if (dimmerOpacity > 0.0) {
-                    g2.setColor(new Color(0, 0, 0, (int) Math.min(240, dimmerOpacity * 255)));
-                    g2.fillRect(drawX, drawY, drawW, drawH);
-                }
-                g2.dispose();
-            }
-        }
+        });
     }
 
     private static Image createSmoothThumbnail(BufferedImage src, int targetW, int targetH) {
@@ -1613,7 +1011,7 @@ public class MangaPanel extends JPanel {
         this.currentTheme = theme;
         setBackground(theme.getBackground());
         mainContainer.setBackground(theme.getBackground());
-        gridContainer.setBackground(theme.getBackground());
+        gridContainer.setBackground(new Color(20, 22, 29));
         statusLabel.setForeground(theme.getTextSecondary());
         revalidate();
         repaint();

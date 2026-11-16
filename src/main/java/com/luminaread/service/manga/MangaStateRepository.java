@@ -1,6 +1,6 @@
 package com.luminaread.service.manga;
 
-import com.luminaread.service.MangaService.MangaItem;
+import com.luminaread.model.manga.MangaItem;
 import com.luminaread.util.Json;
 import com.luminaread.util.AtomicFile;
 

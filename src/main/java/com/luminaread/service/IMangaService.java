@@ -1,36 +1,42 @@
 package com.luminaread.service;
 
+import com.luminaread.model.manga.MangaChapter;
+import com.luminaread.model.manga.MangaItem;
+import com.luminaread.model.manga.MangaSearchResult;
+
 import java.awt.image.BufferedImage;
 import java.util.List;
 import java.util.Map;
 
 public interface IMangaService {
 
-    List<MangaService.MangaItem> searchManga(String query, String sourceFilter);
+    List<MangaItem> searchManga(String query, String sourceFilter);
 
-    String fetchDescription(MangaService.MangaItem manga);
+    MangaSearchResult searchMangaDetailed(String query, String sourceFilter);
 
-    List<MangaService.MangaChapter> fetchChapters(MangaService.MangaItem manga);
+    String fetchDescription(MangaItem manga);
 
-    List<String> fetchPageUrls(MangaService.MangaChapter chapter);
+    List<MangaChapter> fetchChapters(MangaItem manga);
+
+    List<String> fetchPageUrls(MangaChapter chapter);
 
     BufferedImage loadImageCached(String urlStr);
 
-    void saveMangaState(Map<String, MangaService.MangaItem> favorites,
-                        Map<String, MangaService.MangaItem> history,
+    void saveMangaState(Map<String, MangaItem> favorites,
+                        Map<String, MangaItem> history,
                         Map<String, String> progress);
 
-    void saveMangaState(Map<String, MangaService.MangaItem> favorites,
-                        Map<String, MangaService.MangaItem> history,
+    void saveMangaState(Map<String, MangaItem> favorites,
+                        Map<String, MangaItem> history,
                         Map<String, String> progress,
                         Map<String, String> preferences);
 
-    void loadMangaState(Map<String, MangaService.MangaItem> favorites,
-                        Map<String, MangaService.MangaItem> history,
+    void loadMangaState(Map<String, MangaItem> favorites,
+                        Map<String, MangaItem> history,
                         Map<String, String> progress);
 
-    void loadMangaState(Map<String, MangaService.MangaItem> favorites,
-                        Map<String, MangaService.MangaItem> history,
+    void loadMangaState(Map<String, MangaItem> favorites,
+                        Map<String, MangaItem> history,
                         Map<String, String> progress,
                         Map<String, String> preferences);
 }

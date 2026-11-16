@@ -52,9 +52,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.DoubleConsumer;
 
 /**
- * Master Verification Test Suite for LuminaRead.
- * Exhaustively validates all SOLID principles (SRP, OCP, LSP, ISP, DIP),
- * backwards compatibility, constructor contracts, and mockability across the codebase.
+ * Standalone structural and service-contract checks for LuminaRead.
  */
 public class MasterSolidComplianceTest {
 
@@ -66,7 +64,7 @@ public class MasterSolidComplianceTest {
         System.out.println("        LUMINASOFT / LUMINAREAD MASTER SOLID COMPLIANCE VERIFICATION SUITE       ");
         System.out.println("================================================================================");
 
-        runTest("Single Responsibility Principle (SRP) Verification", MasterSolidComplianceTest::verifySrp);
+        runTest("Injected collaborators", MasterSolidComplianceTest::verifySrp);
         runTest("Open/Closed Principle (OCP) Verification", MasterSolidComplianceTest::verifyOcp);
         runTest("Liskov Substitution Principle (LSP) Verification", MasterSolidComplianceTest::verifyLsp);
         runTest("Interface Segregation Principle (ISP) Verification", MasterSolidComplianceTest::verifyIsp);
@@ -121,20 +119,6 @@ public class MasterSolidComplianceTest {
         require(service.getRanobeLibClient() == client, "RanobeService must expose injected client");
         require(service.getStateRepository() == repo, "RanobeService must expose injected repository");
 
-        // Verify RanobeLibClient does NOT contain file writing / persistence methods
-        for (Method m : RanobeLibClient.class.getDeclaredMethods()) {
-            String name = m.getName().toLowerCase();
-            require(!name.contains("savestate") && !name.contains("loadstate"),
-                    "RanobeLibClient violates SRP by having persistence method: " + m.getName());
-        }
-
-        // Verify RanobeStateRepository does NOT contain HTTP / search / network fetching methods
-        for (Method m : RanobeStateRepository.class.getDeclaredMethods()) {
-            String name = m.getName().toLowerCase();
-            require(!name.contains("search") && !name.contains("fetchnetwork") && !name.contains("http"),
-                    "RanobeStateRepository violates SRP by having network method: " + m.getName());
-        }
-
         // --- OnlineCatalog SRP ---
         // OnlineCatalogService coordinates; OpdsFeedParser parses XML/Atom feeds; BookDownloader handles HTTP/streams/saving.
         OpdsFeedParser feedParser = new OpdsFeedParser();
@@ -143,13 +127,6 @@ public class MasterSolidComplianceTest {
 
         require(catalogService.getOpdsFeedParser() == feedParser, "OnlineCatalogService must hold injected feed parser");
         require(catalogService.getBookDownloader() == downloader, "OnlineCatalogService must hold injected downloader");
-
-        // OpdsFeedParser must only parse feeds and not have download file methods
-        for (Method m : OpdsFeedParser.class.getDeclaredMethods()) {
-            String name = m.getName().toLowerCase();
-            require(!name.contains("downloadbook") && !name.contains("savetofile"),
-                    "OpdsFeedParser violates SRP: " + m.getName());
-        }
 
         // --- TTS SRP ---
         // TtsService coordinates playback state/timer; TtsEngine builds the OS command

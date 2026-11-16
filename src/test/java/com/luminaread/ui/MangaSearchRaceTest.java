@@ -1,5 +1,8 @@
 package com.luminaread.ui;
 
+import com.luminaread.model.manga.MangaItem;
+import com.luminaread.model.manga.MangaSearchResult;
+
 import com.luminaread.service.MangaService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -39,10 +42,10 @@ final class MangaSearchRaceTest {
             CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1), interrupted = new CountDownLatch(1);
             try {
                 SwingUtilities.invokeAndWait(() -> Probe.panel = new MangaPanel(null, new MangaService() {
-                    @Override public SearchResult searchMangaDetailed(String query, String source) {
+                    @Override public MangaSearchResult searchMangaDetailed(String query, String source) {
                         started.countDown();
                         try { release.await(); } catch (InterruptedException ex) { interrupted.countDown(); Thread.currentThread().interrupt(); }
-                        return new SearchResult(List.of(), List.of());
+                        return new MangaSearchResult(List.of(), List.of());
                     }
                 }, false));
                 Probe.search("waiting");
@@ -65,7 +68,7 @@ final class MangaSearchRaceTest {
         public static void main(String[] args) throws Exception {
             try {
                 SwingUtilities.invokeAndWait(() -> panel = new MangaPanel(null, new MangaService() {
-                    @Override public SearchResult searchMangaDetailed(String query, String source) {
+                    @Override public MangaSearchResult searchMangaDetailed(String query, String source) {
                         if (query.equals("old")) {
                             oldStarted.countDown();
                             boolean released = false;
@@ -79,7 +82,7 @@ final class MangaSearchRaceTest {
                             }
                             oldReturned.countDown();
                         }
-                        return new SearchResult(List.of(new MangaItem(query, query, "", "", "", "test", "", "")),
+                        return new MangaSearchResult(List.of(new MangaItem(query, query, "", "", "", "test", "", "")),
                                 query.equals("new") ? List.of("MangaLib") : List.of());
                     }
                 }, false));

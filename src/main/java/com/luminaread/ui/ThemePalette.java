@@ -20,7 +20,7 @@ public class ThemePalette {
 
     static {
         register(new ThemePalette(
-                "DAY_PAPER", "Чистый свет (Бумага)",
+                "DAY_PAPER", "Чистый свет",
                 new Color(0xFAF8F5), new Color(0xF1EFEA), new Color(0xFFFFFF),
                 new Color(0xE2DFD7), new Color(0x1E1E24), new Color(0x646470),
                 new Color(0x4F46E5), false
@@ -32,25 +32,25 @@ public class ThemePalette {
                 new Color(0xB45309), false
         ));
         register(new ThemePalette(
-                "AMOLED_DARK", "Глубокая ночь (AMOLED)",
+                "AMOLED_DARK", "Глубокая ночь",
                 new Color(0x0D0E12), new Color(0x16181F), new Color(0x1D202A),
                 new Color(0x2B2F3C), new Color(0xE4E4E7), new Color(0x9CA3AF),
                 new Color(0x6366F1), true
         ));
         register(new ThemePalette(
-                "NORD_TWILIGHT", "Сумерки (Nord)",
+                "NORD_TWILIGHT", "Сумерки",
                 new Color(0x1E222A), new Color(0x252A34), new Color(0x2E3440),
                 new Color(0x3B4252), new Color(0xECEFF4), new Color(0xA3B1C6),
                 new Color(0x38BDF8), true
         ));
         register(new ThemePalette(
-                "EINK_MATTE", "Электронные чернила (E-Ink)",
+                "EINK_MATTE", "Электронные чернила",
                 new Color(0xEDEDED), new Color(0xE0E0E0), new Color(0xF7F7F7),
                 new Color(0xCCCCCC), new Color(0x111111), new Color(0x4A4A4A),
                 new Color(0x222222), false
         ));
         register(new ThemePalette(
-                "FOREST_SAGE", "Мятный комфорт (Защита глаз)",
+                "FOREST_SAGE", "Мятный комфорт",
                 new Color(0xE8F2EA), new Color(0xDCE9DF), new Color(0xF2F8F3),
                 new Color(0xC5DAC9), new Color(0x1B3022), new Color(0x4A6B53),
                 new Color(0x15803D), false

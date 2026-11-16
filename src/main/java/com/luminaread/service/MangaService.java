@@ -1,5 +1,8 @@
 package com.luminaread.service;
 
+import com.luminaread.model.manga.MangaChapter;
+import com.luminaread.model.manga.MangaItem;
+import com.luminaread.model.manga.MangaSearchResult;
 import com.luminaread.service.manga.MangaDexClient;
 import com.luminaread.service.manga.MangaLibClient;
 import com.luminaread.service.manga.MangaStateRepository;
@@ -45,73 +48,17 @@ public class MangaService implements IMangaService {
         this.mediaCacheService = mediaCacheService != null ? mediaCacheService : MediaCacheService.getInstance();
     }
 
-    public static class MangaItem {
-        public final String id;
-        public final String title;
-        public final String rusTitle;
-        public final String description;
-        public final String coverUrl;
-        public final String source;
-        public final String status;
-        public final String rating;
-
-        public MangaItem(String id, String title, String rusTitle, String description, String coverUrl, String source, String status, String rating) {
-            this.id = id;
-            this.title = title != null ? title : "";
-            this.rusTitle = rusTitle != null ? rusTitle : "";
-            this.description = description != null ? description : "";
-            this.coverUrl = coverUrl != null ? coverUrl : "";
-            this.source = source != null ? source : "";
-            this.status = status != null ? status : "";
-            this.rating = rating != null ? rating : "★ —";
-        }
-
-        public String getDisplayTitle() {
-            return (!rusTitle.isEmpty()) ? rusTitle + " (" + title + ")" : title;
-        }
-    }
-
-    public static class MangaChapter {
-        public final String id;
-        public final String number;
-        public final String title;
-        public final String language;
-        public final String source;
-
-        public MangaChapter(String id, String number, String title, String language, String source) {
-            this.id = id;
-            this.number = number != null ? number : "";
-            this.title = title != null ? title : "";
-            this.language = language != null ? language : "ru";
-            this.source = source != null ? source : "";
-        }
-
-        @Override
-        public String toString() {
-            String numStr = number.isEmpty() ? "" : "Глава " + number;
-            String tStr = (title != null && !title.isEmpty()) ? " — " + title : "";
-            String langBadge = " [" + language.toUpperCase() + "]";
-            return (numStr.isEmpty() && tStr.isEmpty()) ? "Глава" + langBadge : (numStr + tStr + langBadge).trim();
-        }
-    }
-
     @Override
     public List<MangaItem> searchManga(String query, String sourceFilter) {
-        SearchResult result = searchMangaDetailed(query, sourceFilter);
+        MangaSearchResult result = searchMangaDetailed(query, sourceFilter);
         if (!result.failedSources().isEmpty()) {
             throw new IllegalStateException("Не удалось выполнить поиск: " + String.join(", ", result.failedSources()));
         }
         return result.items();
     }
 
-    public record SearchResult(List<MangaItem> items, List<String> failedSources) {
-        public SearchResult {
-            items = List.copyOf(items);
-            failedSources = List.copyOf(failedSources);
-        }
-    }
-
-    public SearchResult searchMangaDetailed(String query, String sourceFilter) {
+    @Override
+    public MangaSearchResult searchMangaDetailed(String query, String sourceFilter) {
         List<MangaItem> results = new ArrayList<>();
         List<String> failures = new ArrayList<>();
         String q = (query == null || query.trim().isEmpty()) ? "" : query.trim();
@@ -126,7 +73,7 @@ public class MangaService implements IMangaService {
         if (all || sourceFilter.contains("MangaDex")) {
             searchSource("MangaDex", () -> mangaDexClient.search(q), results, failures);
         }
-        return new SearchResult(results, failures);
+        return new MangaSearchResult(results, failures);
     }
 
     private static void searchSource(String name, java.util.function.Supplier<List<MangaItem>> request,

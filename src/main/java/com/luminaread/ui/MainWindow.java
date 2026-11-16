@@ -5,7 +5,9 @@ import com.luminaread.service.DictionaryService;
 import com.luminaread.service.IDictionaryService;
 import com.luminaread.service.ITtsService;
 import com.luminaread.service.LibraryStorageService;
+import com.luminaread.service.MangaService;
 import com.luminaread.service.OnlineCatalogService;
+import com.luminaread.service.RanobeService;
 import com.luminaread.service.TtsService;
 
 import javax.swing.BorderFactory;
@@ -151,13 +153,13 @@ public class MainWindow extends JFrame {
             sidebarPanel.setVisible(sidebarVisible);
             sidebarPanel.revalidate();
             sidebarPanel.repaint();
-        });
+        }, new MangaService(), true);
 
         ranobePanel = new RanobePanel(sidebarVisible -> {
             sidebarPanel.setVisible(sidebarVisible);
             sidebarPanel.revalidate();
             sidebarPanel.repaint();
-        });
+        }, new RanobeService(), true);
 
         contentCardsPanel.add(libraryPanel, VIEW_LIBRARY);
         contentCardsPanel.add(readerPanel, VIEW_READER);

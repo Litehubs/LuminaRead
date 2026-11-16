@@ -1,8 +1,8 @@
 package com.luminaread.ui;
 
 import com.luminaread.service.MangaService;
-import com.luminaread.service.MangaService.MangaChapter;
-import com.luminaread.service.MangaService.MangaItem;
+import com.luminaread.model.manga.MangaChapter;
+import com.luminaread.model.manga.MangaItem;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.ImageIcon;
