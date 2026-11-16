@@ -131,7 +131,7 @@ public class MangaPanel extends JPanel {
 
         add(mainContainer, BorderLayout.CENTER);
 
-        yandexService.addAuthListener(authListener);
+        yandexService.addListener(authListener);
         updateAuthButtonState();
 
         if (initialSearch) performSearch("");
@@ -157,7 +157,7 @@ public class MangaPanel extends JPanel {
         if (disposed) return;
         disposed = true;
         cancelViewTransition();
-        yandexService.removeAuthListener(authListener);
+        yandexService.removeListener(authListener);
         mangaSearch.cancel();
         cancelDetailRequests();
         currentLoadToken.incrementAndGet();
@@ -211,7 +211,7 @@ public class MangaPanel extends JPanel {
             authBtn.setBackground(new Color(255, 214, 0));
             authBtn.setForeground(new Color(20, 20, 20));
         } else {
-            authBtn.setText(account.status() == YandexAuthService.Status.SAVED_PROFILE
+            authBtn.setText(account.status() == YandexAuthService.Status.SAVED
                     ? "🟡 Подтвердить вход" : "🟡 Войти через Яндекс ID");
             authBtn.setBackground(new Color(55, 60, 75));
             authBtn.setForeground(new Color(230, 235, 245));

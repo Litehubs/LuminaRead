@@ -31,10 +31,10 @@ final class YandexBrowserFlowTest {
         try (var provider = new Provider()) {
             Path file = home.resolve("yandex_account.json");
             var service = provider.service(file);
-            var login = service.prepareBrowserLogin();
-            YandexAuthService.YandexUser user = login.complete();
+            var login = service.beginLogin();
+            YandexAuthService.Profile user = login.run();
             assertEquals("verified-id", user.id());
-            assertEquals("verified", user.getDisplayTitle());
+            assertEquals("verified", user.title());
             assertEquals("", user.defaultEmail());
             assertEquals(YandexAuthService.Status.VERIFIED, service.account().status());
             assertEquals("one-time-code", provider.exchange.get().get("code"));
@@ -45,7 +45,7 @@ final class YandexBrowserFlowTest {
             assertEquals("OAuth issued-token", provider.profileAuthorization.get());
             assertFalse(Files.readString(file).contains("issued-token"));
             assertFalse(Files.readString(file).contains("refresh-secret"));
-            assertThrows(IOException.class, login::complete);
+            assertThrows(IOException.class, login::run);
         }
     }
 
@@ -53,12 +53,12 @@ final class YandexBrowserFlowTest {
         try (var provider = new Provider()) {
             var service = provider.service(home.resolve("yandex_account.json"));
             provider.tokenStatus = 302;
-            assertThrows(IOException.class, () -> service.prepareBrowserLogin().complete());
+            assertThrows(IOException.class, () -> service.beginLogin().run());
             assertEquals(0, provider.profileRequests.get());
             assertEquals(0, provider.redirectRequests.get());
             provider.tokenStatus = 200;
             provider.profileStatus = 302;
-            assertThrows(IOException.class, () -> service.prepareBrowserLogin().complete());
+            assertThrows(IOException.class, () -> service.beginLogin().run());
             assertEquals(0, provider.redirectRequests.get());
             assertEquals(YandexAuthService.Status.SIGNED_OUT, service.account().status());
         }
@@ -68,17 +68,17 @@ final class YandexBrowserFlowTest {
         try (var provider = new Provider()) {
             var service = provider.service(home.resolve("yandex_account.json"));
             provider.tokenBody = "{\"access_token\":\"secret-marker\\r\\ninvalid\"}";
-            IOException invalid = assertThrows(IOException.class, () -> service.prepareBrowserLogin().complete());
+            IOException invalid = assertThrows(IOException.class, () -> service.beginLogin().run());
             assertFalse(invalid.getMessage().contains("secret-marker"));
             assertEquals(0, provider.profileRequests.get());
 
             provider.tokenBody = "{\"access_token\":\"issued-token\"}";
             provider.profileBody = " ".repeat(65_537);
-            assertTrue(assertThrows(IOException.class, () -> service.prepareBrowserLogin().complete())
+            assertTrue(assertThrows(IOException.class, () -> service.beginLogin().run())
                     .getMessage().contains("Слишком большой ответ"));
 
             provider.profileBody = "{\"id\":\"verified-id\",\"client_id\":\"another-app\"}";
-            assertThrows(IOException.class, () -> service.prepareBrowserLogin().complete());
+            assertThrows(IOException.class, () -> service.beginLogin().run());
             assertEquals(YandexAuthService.Status.SIGNED_OUT, service.account().status());
         }
     }
@@ -130,7 +130,7 @@ final class YandexBrowserFlowTest {
         }
 
         YandexAuthService service(Path profileFile) {
-            return new YandexAuthService("client", new YandexOAuthClient("client", base.resolve("/token"), base.resolve("/info")),
+            return new YandexAuthService(new YandexOAuth("client", base.resolve("/token"), base.resolve("/info")),
                     new YandexProfileStore(profileFile), this::openBrowser, 0);
         }
 

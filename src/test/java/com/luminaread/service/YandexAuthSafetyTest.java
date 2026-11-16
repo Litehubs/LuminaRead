@@ -23,7 +23,7 @@ final class YandexAuthSafetyTest {
                  "token":"legacy-secret","refresh_token":"legacy-refresh","avatarUrl":"legacy-url"}
                 """);
         var service = service(file, url -> fail("Restoring a local profile must not open the browser"));
-        assertEquals(YandexAuthService.Status.SAVED_PROFILE, service.account().status());
+        assertEquals(YandexAuthService.Status.SAVED, service.account().status());
         assertEquals("Подтвердите вход: old-user", service.account().description());
         assertEquals("", service.account().profile().defaultEmail());
         var fields = (Map<?, ?>) Json.parse(Files.readString(file));
@@ -40,7 +40,7 @@ final class YandexAuthSafetyTest {
         var store = new YandexProfileStore(home.resolve("yandex_account.json"));
         var title = new StringBuilder("Имя \" \\ 🟡");
         for (char control = 0; control < 0x20; control++) title.append(control);
-        var original = new YandexAuthService.YandexUser("id", "login", title.toString(), "login@yandex.ru");
+        var original = new YandexAuthService.Profile("id", "login", title.toString(), "login@yandex.ru");
         store.save(original);
         assertEquals(original, store.load());
         assertTrue(Files.readString(store.path()).contains("\\u0000"));
@@ -60,8 +60,8 @@ final class YandexAuthSafetyTest {
         });
         var threads = Executors.newFixedThreadPool(2);
         try {
-            var login = service.prepareBrowserLogin();
-            var auth = threads.submit(login::complete);
+            var login = service.beginLogin();
+            var auth = threads.submit(login::run);
             assertTrue(browserEntered.await(5, TimeUnit.SECONDS));
             var logout = threads.submit(() -> { service.logout(); return service.account().status(); });
             assertEquals(YandexAuthService.Status.SIGNED_OUT, logout.get(3, TimeUnit.SECONDS));
@@ -82,9 +82,9 @@ final class YandexAuthSafetyTest {
         var notice = new CountDownLatch(2);
         var worker = Executors.newSingleThreadExecutor();
         try {
-            service.addAuthListener(() -> {
+            service.addListener(() -> {
                 try {
-                    worker.submit(() -> service.prepareBrowserLogin().close()).get(2, TimeUnit.SECONDS);
+                    worker.submit(() -> service.beginLogin().close()).get(2, TimeUnit.SECONDS);
                     notice.countDown();
                 } catch (Exception ex) {
                     throw new AssertionError("Listener ran with the authorization state locked", ex);
@@ -99,6 +99,6 @@ final class YandexAuthSafetyTest {
     }
 
     private static YandexAuthService service(Path path, YandexAuthService.Browser browser) {
-        return new YandexAuthService("client", new YandexOAuthClient("client"), new YandexProfileStore(path), browser, 0);
+        return new YandexAuthService(new YandexOAuth("client"), new YandexProfileStore(path), browser, 0);
     }
 }
