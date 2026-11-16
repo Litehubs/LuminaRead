@@ -23,8 +23,10 @@ final class YandexBrowserFlowTest {
         public static void main(String[] args) throws Exception {
             YandexPkce attempt = YandexPkce.create(YandexAuthService.YANDEX_OAUTH_CLIENT_ID);
             var oversizedProfile = new java.util.concurrent.atomic.AtomicBoolean();
+            var profileRequests = new java.util.concurrent.atomic.AtomicInteger();
             java.net.URL.setURLStreamHandlerFactory(protocol -> "https".equals(protocol) ? new java.net.URLStreamHandler() {
                 protected java.net.URLConnection openConnection(java.net.URL url) {
+                    if (url.getHost().equals("login.yandex.ru")) profileRequests.incrementAndGet();
                     return new java.net.HttpURLConnection(url) {
                         private final java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
                         public void disconnect() { }
@@ -55,9 +57,30 @@ final class YandexBrowserFlowTest {
             var field = YandexAuthService.class.getDeclaredField("pendingAuthorization");
             field.setAccessible(true);
             field.set(service, attempt);
-            if (!service.completeBrowserAuthorization("one-time-code").isAuthenticated()) throw new AssertionError("Login failed");
+            var published = new java.util.concurrent.atomic.AtomicReference<YandexAuthService.YandexUser>();
+            service.addAuthListener(published::set);
+            var signedIn = service.completeBrowserAuthorization("one-time-code");
+            if (!signedIn.isAuthenticated() || signedIn != published.get() || signedIn != service.getCurrentUser()) {
+                throw new AssertionError("Verified profile was not published");
+            }
+            for (var member : signedIn.getClass().getFields()) {
+                if ("issued-token".equals(member.get(signedIn))) {
+                    throw new AssertionError("The published profile exposed the bearer token");
+                }
+            }
             try { service.completeBrowserAuthorization("one-time-code"); throw new AssertionError("Code reused"); }
             catch (IllegalStateException expected) { }
+            for (String separator : new String[]{"\r\n", " ", "\u00a0"}) {
+                try {
+                    service.loginWithOAuthToken("secret-marker" + separator + "invalid");
+                    throw new AssertionError("Malformed token was accepted");
+                } catch (IllegalArgumentException expected) {
+                    if (expected.getMessage().contains("secret-marker")) {
+                        throw new AssertionError("Invalid-token error exposed the credential");
+                    }
+                }
+            }
+            if (profileRequests.get() != 1) throw new AssertionError("Malformed token reached HTTP transport");
             oversizedProfile.set(true);
             try {
                 service.loginWithOAuthToken("issued-token");

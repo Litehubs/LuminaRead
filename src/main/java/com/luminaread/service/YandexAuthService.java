@@ -17,28 +17,28 @@ import java.util.function.Consumer;
 
 public class YandexAuthService {
 
-    public static class YandexUser {
+    public static final class YandexUser {
         public final String id;
         public final String login;
         public final String displayName;
         public final String realName;
         public final String defaultEmail;
         public final String avatarUrl;
-        public final String token;
+        private final boolean authenticated;
 
-        public YandexUser(String id, String login, String displayName, String realName,
-                          String defaultEmail, String avatarUrl, String token) {
+        private YandexUser(String id, String login, String displayName, String realName,
+                           String defaultEmail, String avatarUrl, boolean authenticated) {
             this.id = id != null ? id : "";
             this.login = login != null ? login : "";
             this.displayName = displayName != null && !displayName.isEmpty() ? displayName : (login != null ? login : "Пользователь");
             this.realName = realName != null ? realName : "";
             this.defaultEmail = defaultEmail != null ? defaultEmail : "";
             this.avatarUrl = avatarUrl != null ? avatarUrl : "";
-            this.token = token != null ? token : "";
+            this.authenticated = authenticated;
         }
 
         public boolean isAuthenticated() {
-            return !token.isEmpty() && (!login.isEmpty() || !id.isEmpty());
+            return authenticated;
         }
 
         public String getDisplayTitle() {
@@ -257,10 +257,13 @@ public class YandexAuthService {
     }
 
     private YandexUser loginWithOAuthToken(String token, long generation) throws Exception {
-        if (token == null || token.trim().isEmpty()) {
-            throw new IllegalArgumentException("OAuth токен не может быть пустым.");
+        if (token == null || token.chars().anyMatch(ch -> ch < 0x20 || ch > 0x7e)) {
+            throw new IllegalArgumentException("Яндекс вернул недопустимый OAuth-токен.");
         }
-        String cleanToken = token.trim().replaceFirst("^(OAuth|Bearer)\\s+", "");
+        String cleanToken = token.trim().replaceFirst("^(OAuth|Bearer) +", "");
+        if (cleanToken.isEmpty() || cleanToken.indexOf(' ') >= 0) {
+            throw new IllegalArgumentException("Яндекс вернул недопустимый OAuth-токен.");
+        }
 
         HttpURLConnection conn = (HttpURLConnection) new URL(YANDEX_USER_INFO_URL).openConnection();
         conn.setInstanceFollowRedirects(false);
@@ -301,7 +304,7 @@ public class YandexAuthService {
             avatarUrl = "https://avatars.yandex.net/get-yapic/" + avatarId + "/islands-200";
         }
 
-        YandexUser user = new YandexUser(id, login, displayName, realName, defaultEmail, avatarUrl, cleanToken);
+        YandexUser user = new YandexUser(id, login, displayName, realName, defaultEmail, avatarUrl, true);
         synchronized (this) {
             if (generation != authorizationGeneration) throw new IllegalStateException("Авторизация отменена.");
             this.currentUser = user;
@@ -373,8 +376,7 @@ public class YandexAuthService {
             String email = str(m.get("defaultEmail"));
             String avatarUrl = str(m.get("avatarUrl"));
             // Persisted profiles are not proof of a live authenticated session.
-            String token = "";
-            this.currentUser = new YandexUser(id, login, displayName, realName, email, avatarUrl, token);
+            this.currentUser = new YandexUser(id, login, displayName, realName, email, avatarUrl, false);
             if (m.containsKey("token")) savePersistedAccount();
         } catch (Exception ex) {
             // The persisted data may contain an old token; do not log its contents or parse exception.
