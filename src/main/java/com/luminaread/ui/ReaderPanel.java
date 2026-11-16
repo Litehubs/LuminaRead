@@ -114,6 +114,7 @@ public class ReaderPanel extends JPanel {
     private final JEditorPane bookEditorPane;
     private final JScrollPane editorScrollPane;
     private JPanel readerCanvasWrapper;
+    private final MotionSurface pageSurface = new MotionSurface();
 
     private final JButton prevBtn;
     private final JButton nextBtn;
@@ -324,7 +325,9 @@ public class ReaderPanel extends JPanel {
                 }
             }
         };
-        readerCanvasWrapper.add(editorScrollPane, BorderLayout.CENTER);
+        pageSurface.setLayout(new BorderLayout());
+        pageSurface.add(editorScrollPane, BorderLayout.CENTER);
+        readerCanvasWrapper.add(pageSurface, BorderLayout.CENTER);
 
         mainSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, tocScrollPane, readerCanvasWrapper);
         mainSplitPane.setDividerLocation(250);
@@ -541,6 +544,7 @@ public class ReaderPanel extends JPanel {
     }
 
     private void showPageAt(int scrollOffset) {
+        pageSurface.cancelTransition();
         clearSearch();
         currentBook.setScrollOffset(Math.max(0, scrollOffset));
         renderCurrentViewport(scrollOffset);
@@ -649,12 +653,7 @@ public class ReaderPanel extends JPanel {
         ReaderSettings settings = storageService.getSettings();
 
         if (settings.getReadingMode() == ReaderSettings.ReadingMode.PAGED) {
-            if (currentPageIndex + 1 < currentChapterPages.size()) {
-                currentPageIndex++;
-                showPageAt(0);
-            } else if (currentChapterIndex + 1 < currentContent.getChapters().size()) {
-                goToChapterAndPage(currentChapterIndex + 1, 0);
-            }
+            turnPage(1);
         } else {
             JScrollBar vBar = editorScrollPane.getVerticalScrollBar();
             int bottom = vBar.getMaximum() - vBar.getVisibleAmount();
@@ -673,14 +672,7 @@ public class ReaderPanel extends JPanel {
         ReaderSettings settings = storageService.getSettings();
 
         if (settings.getReadingMode() == ReaderSettings.ReadingMode.PAGED) {
-            if (currentPageIndex > 0) {
-                currentPageIndex--;
-                showPageAt(0);
-            } else if (currentChapterIndex > 0) {
-                int prevChap = currentChapterIndex - 1;
-                List<String> prevPages = chapterLayout.pages(currentContent.getChapters().get(prevChap));
-                goToChapterAndPage(prevChap, Math.max(0, prevPages.size() - 1));
-            }
+            turnPage(-1);
         } else {
             JScrollBar vBar = editorScrollPane.getVerticalScrollBar();
             int prevVal = vBar.getValue() - (int) (editorScrollPane.getViewport().getHeight() * 0.85);
@@ -691,6 +683,27 @@ public class ReaderPanel extends JPanel {
                 goToChapterAndPage(currentChapterIndex - 1, 0, SCROLL_TO_END);
             }
         }
+    }
+
+    private void turnPage(int direction) {
+        int targetPage = currentPageIndex + direction;
+        if (targetPage >= 0 && targetPage < currentChapterPages.size()) {
+            pageSurface.change(MotionSurface.Effect.PAGE, direction, () -> {
+                currentPageIndex = targetPage;
+                showPageAt(0);
+            });
+            return;
+        }
+        int targetChapter = currentChapterIndex + direction;
+        List<Chapter> chapters = currentContent.getChapters();
+        if (targetChapter < 0 || targetChapter >= chapters.size()) return;
+
+        int entryPage = direction > 0 ? 0 : chapterLayout.pages(chapters.get(targetChapter)).size() - 1;
+        pageSurface.change(MotionSurface.Effect.PAGE, direction, () -> goToChapterAndPage(targetChapter, entryPage));
+    }
+
+    void setAnimationsEnabled(boolean enabled) {
+        pageSurface.setAnimationsEnabled(enabled);
     }
 
     private void saveReadingProgress() {
@@ -1036,6 +1049,7 @@ public class ReaderPanel extends JPanel {
     }
 
     public void stopActiveFeatures() {
+        pageSurface.cancelTransition();
         if (saveScrollTimer.isRunning()) saveReadingProgress();
         bookLoader.cancel();
         dictionaryLookup.cancel();
@@ -1060,6 +1074,7 @@ public class ReaderPanel extends JPanel {
     }
 
     public void applyTheme(ThemePalette theme) {
+        pageSurface.cancelTransition();
         this.currentTheme = theme;
         setBackground(theme.getBackground());
         primaryBar.setBackground(theme.getSurface());

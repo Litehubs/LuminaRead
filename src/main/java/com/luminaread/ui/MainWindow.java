@@ -23,6 +23,7 @@ import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
@@ -51,9 +52,14 @@ public class MainWindow extends JFrame {
     private static final String VIEW_STATS = "STATS";
     private static final String VIEW_SETTINGS = "SETTINGS";
 
+    private static final List<String> VIEWS = List.of(VIEW_LIBRARY, VIEW_READER, VIEW_CATALOG, VIEW_RANOBE,
+            VIEW_MANGA, VIEW_STATS, VIEW_SETTINGS);
+
     private final LibraryStorageService storageService;
     private final JPanel sidebarPanel;
-    private final MotionCardPanel contentCardsPanel;
+    private final MotionSurface workspace = new MotionSurface();
+    private final CardLayout viewCards = new CardLayout();
+    private final JPanel contentCardsPanel = new JPanel(viewCards);
 
     private final LibraryPanel libraryPanel;
     private final ReaderPanel readerPanel;
@@ -91,8 +97,6 @@ public class MainWindow extends JFrame {
         sidebarPanel.setLayout(new BoxLayout(sidebarPanel, BoxLayout.Y_AXIS));
         sidebarPanel.setPreferredSize(new Dimension(235, 800));
         sidebarPanel.setBorder(BorderFactory.createEmptyBorder(20, 16, 20, 16));
-
-        contentCardsPanel = new MotionCardPanel();
 
         libraryPanel = new LibraryPanel(
                 storageService,
@@ -146,16 +150,20 @@ public class MainWindow extends JFrame {
             sidebarPanel.repaint();
         }, new RanobeService(), true);
 
-        contentCardsPanel.addCard(VIEW_LIBRARY, libraryPanel);
-        contentCardsPanel.addCard(VIEW_READER, readerPanel);
-        contentCardsPanel.addCard(VIEW_CATALOG, onlineCatalogPanel);
-        contentCardsPanel.addCard(VIEW_RANOBE, ranobePanel);
-        contentCardsPanel.addCard(VIEW_MANGA, mangaPanel);
-        contentCardsPanel.addCard(VIEW_STATS, statsAndNotesPanel);
-        contentCardsPanel.addCard(VIEW_SETTINGS, settingsPanel);
+        contentCardsPanel.add(libraryPanel, VIEW_LIBRARY);
+        contentCardsPanel.add(readerPanel, VIEW_READER);
+        contentCardsPanel.add(onlineCatalogPanel, VIEW_CATALOG);
+        contentCardsPanel.add(ranobePanel, VIEW_RANOBE);
+        contentCardsPanel.add(mangaPanel, VIEW_MANGA);
+        contentCardsPanel.add(statsAndNotesPanel, VIEW_STATS);
+        contentCardsPanel.add(settingsPanel, VIEW_SETTINGS);
 
-        add(sidebarPanel, BorderLayout.WEST);
-        add(contentCardsPanel, BorderLayout.CENTER);
+        mangaPanel.useTransitionSurface(workspace);
+        ranobePanel.useTransitionSurface(workspace);
+        workspace.setLayout(new BorderLayout());
+        workspace.add(sidebarPanel, BorderLayout.WEST);
+        workspace.add(contentCardsPanel, BorderLayout.CENTER);
+        add(workspace, BorderLayout.CENTER);
 
         setupNativeMenuBar();
         setupDragAndDropImport();
@@ -192,13 +200,14 @@ public class MainWindow extends JFrame {
     private void updateAnimations() {
         boolean enabled = !storageService.getSettings().isReduceMotion()
                 && !Boolean.getBoolean("luminaread.reduceMotion");
-        contentCardsPanel.setAnimationsEnabled(enabled);
+        workspace.setAnimationsEnabled(enabled);
+        readerPanel.setAnimationsEnabled(enabled);
         mangaPanel.setAnimationsEnabled(enabled);
         ranobePanel.setAnimationsEnabled(enabled);
     }
 
     private void disposeReadingResources() {
-        contentCardsPanel.cancelTransition();
+        workspace.cancelTransition();
         readerPanel.disposeResources();
         mangaPanel.disposeResources();
         ranobePanel.disposeResources();
@@ -257,6 +266,19 @@ public class MainWindow extends JFrame {
     }
 
     public void switchView(String viewKey) {
+        if (viewKey == null) return;
+        int index = VIEWS.indexOf(viewKey);
+        if (index < 0) return;
+        if (viewKey.equals(currentView)) {
+            showView(viewKey);
+            return;
+        }
+        var effect = VIEW_READER.equals(viewKey) ? MotionSurface.Effect.OPEN
+                : VIEW_READER.equals(currentView) ? MotionSurface.Effect.CLOSE : MotionSurface.Effect.SLIDE;
+        workspace.change(effect, Integer.compare(index, VIEWS.indexOf(currentView)), () -> showView(viewKey));
+    }
+
+    private void showView(String viewKey) {
         if (VIEW_MANGA.equals(currentView) && !VIEW_MANGA.equals(viewKey)) {
             mangaPanel.stopAutoScroll();
             mangaPanel.cancelViewTransition();
@@ -277,7 +299,7 @@ public class MainWindow extends JFrame {
             settingsPanel.refreshDownloadsSection();
         }
         sidebarPanel.setVisible(!VIEW_READER.equals(viewKey));
-        contentCardsPanel.showCard(viewKey);
+        viewCards.show(contentCardsPanel, viewKey);
         rebuildSidebar();
     }
 
@@ -442,7 +464,16 @@ public class MainWindow extends JFrame {
     }
 
     public void applyGlobalTheme(ThemePalette theme) {
+        if (theme.getId().equals(currentTheme.getId())) {
+            applyPalette(theme);
+        } else {
+            workspace.change(MotionSurface.Effect.DISSOLVE, 0, () -> applyPalette(theme));
+        }
+    }
+
+    private void applyPalette(ThemePalette theme) {
         this.currentTheme = theme;
+        workspace.setBackground(theme.getBackground());
         sidebarPanel.setBackground(theme.getSurface());
         sidebarPanel.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(0, 0, 0, 1, theme.getBorder()),

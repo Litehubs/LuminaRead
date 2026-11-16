@@ -46,7 +46,7 @@ public class MangaPanel extends JPanel {
     private final LatestSwingRequest<String> detailDescriptionRequest = new LatestSwingRequest<>();
     private final Consumer<Boolean> onToggleSidebar;
 
-    private final MotionCardPanel mainContainer = new MotionCardPanel();
+    private final MotionCardPanel mainContainer = new MotionCardPanel("READER");
 
     private final Map<String, MangaItem> favoriteManga = new LinkedHashMap<>();
     private final Map<String, MangaItem> historyManga = new LinkedHashMap<>();
@@ -136,6 +136,14 @@ public class MangaPanel extends JPanel {
         updateAuthButtonState();
 
         if (initialSearch) performSearch("");
+    }
+
+    void useTransitionSurface(MotionSurface surface) {
+        mainContainer.useTransitionSurface(surface);
+    }
+
+    private void showSidebar() {
+        if (onToggleSidebar != null) onToggleSidebar.accept(true);
     }
 
     void setAnimationsEnabled(boolean enabled) {
@@ -261,8 +269,7 @@ public class MangaPanel extends JPanel {
         backBtn.addActionListener(e -> {
             cancelDetailRequests();
             currentLoadToken.incrementAndGet();
-            if (onToggleSidebar != null) onToggleSidebar.accept(true);
-            mainContainer.showCard("EXPLORE");
+            mainContainer.showCard("EXPLORE", this::showSidebar);
         });
 
         favToggleBtn.setFocusPainted(false);
@@ -360,8 +367,7 @@ public class MangaPanel extends JPanel {
             stopAutoScroll();
             currentLoadToken.incrementAndGet();
             chapterLoading = false;
-            if (onToggleSidebar != null) onToggleSidebar.accept(true);
-            mainContainer.showCard("DETAILS");
+            mainContainer.showCard("DETAILS", this::showSidebar);
         });
 
         settingsPopupBtn.setFont(new Font("SansSerif", Font.BOLD, 12));
@@ -803,12 +809,6 @@ public class MangaPanel extends JPanel {
         pageCounterLabel.setText("");
 
         MangaChapter ch = chapters.visible().get(idx);
-        if (autoHideSidebar && onToggleSidebar != null) {
-            onToggleSidebar.accept(false);
-            isZenActive = true;
-            zenToggleBtn.setText("◨ Меню");
-        }
-
         stopAutoScroll();
         readerTitleLabel.setText(ch.toString() + " — загрузка страниц...");
         readerCanvasPanel.removeAll();
@@ -822,7 +822,13 @@ public class MangaPanel extends JPanel {
         readerCanvasPanel.revalidate();
         readerCanvasPanel.repaint();
 
-        mainContainer.showCard("READER");
+        mainContainer.showCard("READER", () -> {
+            if (autoHideSidebar && onToggleSidebar != null) {
+                onToggleSidebar.accept(false);
+                isZenActive = true;
+                zenToggleBtn.setText("◨ Меню");
+            }
+        });
 
         workers.submit(() -> token == currentLoadToken.get(), () -> mangaService.fetchPageUrls(ch), loaded -> {
             chapterLoading = false;
@@ -924,8 +930,7 @@ public class MangaPanel extends JPanel {
             backToChBtn.setFocusPainted(false);
             backToChBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
             backToChBtn.addActionListener(e -> {
-                if (onToggleSidebar != null) onToggleSidebar.accept(true);
-                mainContainer.showCard("DETAILS");
+                mainContainer.showCard("DETAILS", this::showSidebar);
             });
 
             errCard.add(Box.createVerticalStrut(60));
