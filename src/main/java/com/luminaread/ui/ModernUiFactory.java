@@ -166,17 +166,21 @@ public final class ModernUiFactory {
         JButton btn = new JButton(text);
 
         btn.setFont(uiFont(Font.BOLD, 12));
-        btn.setForeground(theme.getTextPrimary());
-        btn.setBackground(theme.getSurface());
         btn.setOpaque(true);
         btn.setFocusPainted(false);
         btn.setAlignmentX(Component.LEFT_ALIGNMENT);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        btn.setBorder(BorderFactory.createCompoundBorder(
+        styleFlatButton(btn, theme);
+        return btn;
+    }
+
+    static void styleFlatButton(JButton button, ThemePalette theme) {
+        button.setForeground(theme.getTextPrimary());
+        button.setBackground(theme.getSurface());
+        button.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.getBorder(), 1, true),
                 BorderFactory.createEmptyBorder(6, 12, 6, 12)
         ));
-        return btn;
     }
 
     public static void styleTextField(JTextField field, ThemePalette theme) {

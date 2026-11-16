@@ -10,24 +10,20 @@ import java.util.regex.Pattern;
 final class ReaderMarkupDecorator {
     private ReaderMarkupDecorator() {}
 
-    static String decorate(String html, List<Highlight> highlights, int chapterIndex, String search) {
+    static String decorate(String html, List<Highlight> highlights, int chapterIndex) {
         String result = html;
         for (Highlight highlight : highlights) {
             if (highlight.getChapterIndex() != chapterIndex || highlight.getSelectedText().length() < 4) continue;
             String color = highlight.getColorHex();
             result = decorateText(result, HtmlSanitizer.escapeHtml(highlight.getSelectedText()),
-                    "<span style='background-color:" + color + "; color:#111111;'>", "</span>", false);
-        }
-        if (search != null && !search.isBlank()) {
-            result = decorateText(result, HtmlSanitizer.escapeHtml(search),
-                    "<span style='background-color:#FACC15; color:#000000;'><b>", "</b></span>", true);
+                    "<span style='background-color:" + color + "; color:#111111;'>", "</span>");
         }
         return result;
     }
 
-    private static String decorateText(String html, String target, String open, String close, boolean ignoreCase) {
+    private static String decorateText(String html, String target, String open, String close) {
         if (target.isEmpty()) return html;
-        Pattern pattern = Pattern.compile(Pattern.quote(target), ignoreCase ? Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE : 0);
+        Pattern pattern = Pattern.compile(Pattern.quote(target));
         StringBuilder out = new StringBuilder(html.length());
         int pos = 0;
         while (pos < html.length()) {

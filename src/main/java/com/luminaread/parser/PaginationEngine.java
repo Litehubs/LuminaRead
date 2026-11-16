@@ -15,10 +15,12 @@ public final class PaginationEngine {
             Pattern.compile("(<(?:h[1-6]|p|blockquote|div)[^>]*>[\\s\\S]*?</(?:h[1-6]|p|blockquote|div)>|<br\\s*/?>)",
                     Pattern.CASE_INSENSITIVE);
 
-    private static final Map<String, List<String>> PAGINATION_CACHE =
+    private record CacheKey(String html, int charsPerPage, boolean twoColumnSpread) {}
+
+    private static final Map<CacheKey, List<String>> PAGINATION_CACHE =
             Collections.synchronizedMap(new LinkedHashMap<>(64, 0.75f, true) {
                 @Override
-                protected boolean removeEldestEntry(Map.Entry<String, List<String>> eldest) {
+                protected boolean removeEldestEntry(Map.Entry<CacheKey, List<String>> eldest) {
                     return size() > 64;
                 }
             });
@@ -32,7 +34,7 @@ public final class PaginationEngine {
 
         int effectiveLimit = Math.max(600, targetCharsPerPage);
         String html = chapter.getHtmlContent();
-        String cacheKey = chapter.getIndex() + "_" + html.hashCode() + "_" + effectiveLimit + "_" + twoColumnSpread;
+        CacheKey cacheKey = new CacheKey(html, effectiveLimit, twoColumnSpread);
 
         List<String> cached = PAGINATION_CACHE.get(cacheKey);
         if (cached != null) {

@@ -6,7 +6,6 @@ import com.luminaread.model.Bookmark;
 import com.luminaread.model.Chapter;
 import com.luminaread.model.Highlight;
 import com.luminaread.model.ReaderSettings;
-import com.luminaread.parser.PaginationEngine;
 import com.luminaread.service.DictionaryService;
 import com.luminaread.service.IDictionaryService;
 import com.luminaread.service.ITtsService;
@@ -29,7 +28,9 @@ import javax.swing.JPanel;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSlider;
+import javax.swing.text.BadLocationException;
 import javax.swing.text.DefaultCaret;
+import javax.swing.text.DefaultHighlighter;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
 import javax.swing.KeyStroke;
@@ -46,6 +47,7 @@ import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -54,7 +56,9 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 public class ReaderPanel extends JPanel {
     private static final DateTimeFormatter CLOCK_FMT = DateTimeFormatter.ofPattern("HH:mm");
@@ -73,7 +77,7 @@ public class ReaderPanel extends JPanel {
     private BookContent currentContent;
     private final ReaderBookLoader bookLoader;
     private List<String> currentChapterPages = Collections.emptyList();
-    private ReaderSettings.ReadingMode chapterReadingMode;
+    private ReaderTextSearch.Layout chapterLayout;
     private static final int SCROLL_TO_END = -1;
     private Integer pendingScrollOffset;
     private boolean disposed;
@@ -81,7 +85,10 @@ public class ReaderPanel extends JPanel {
     private final Timer saveScrollTimer;
     private int currentChapterIndex = 0;
     private int currentPageIndex = 0;
-    private String activeSearchHighlightTerm = "";
+    private final LatestSwingRequest<ReaderTextSearch.Match> searchRequest = new LatestSwingRequest<>();
+    private ReaderTextSearch.Match searchMatch;
+    private Pattern searchPattern;
+    private Object searchHighlight;
 
     private boolean zenDistractionFree = false;
     private static final long WHEEL_CHAPTER_COOLDOWN_NANOS = 250_000_000L;
@@ -112,7 +119,7 @@ public class ReaderPanel extends JPanel {
     private final JButton nextBtn;
     private final JButton autoScrollBtn;
     private final JButton ttsBtn;
-    private final JTextField inBookSearchField;
+    private final ReaderSearchBar searchBar;
     private final JSlider brightnessSlider;
     private final JCheckBox eyeCareCheckbox;
 
@@ -203,12 +210,7 @@ public class ReaderPanel extends JPanel {
         JButton fontPlusBtn = ModernUiFactory.createFlatButton("A+", currentTheme);
         fontPlusBtn.addActionListener(e -> adjustFontSize(+2));
 
-        inBookSearchField = new JTextField(16);
-        ModernUiFactory.styleTextField(inBookSearchField, currentTheme);
-        inBookSearchField.addActionListener(e -> searchInBookNext());
-
-        JButton searchNextBtn = ModernUiFactory.createFlatButton("Найти в книге", currentTheme);
-        searchNextBtn.addActionListener(e -> searchInBookNext());
+        searchBar = new ReaderSearchBar(currentTheme, this::searchInBook, this::clearSearch);
 
         ReaderSettings settings = storageService.getSettings();
         int initialBrightness = (int) Math.round((1.0 - settings.getDimmerOpacity()) * 100);
@@ -238,9 +240,7 @@ public class ReaderPanel extends JPanel {
         secondaryBar.add(new JLabel("Шрифт:"));
         secondaryBar.add(fontMinusBtn);
         secondaryBar.add(fontPlusBtn);
-        secondaryBar.add(new JLabel("  Поиск:"));
-        secondaryBar.add(inBookSearchField);
-        secondaryBar.add(searchNextBtn);
+        secondaryBar.add(searchBar);
         secondaryBar.add(new JLabel("  Яркость:"));
         secondaryBar.add(brightnessSlider);
         secondaryBar.add(eyeCareCheckbox);
@@ -425,7 +425,7 @@ public class ReaderPanel extends JPanel {
         am.put("nextPage", new AbstractAction() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
-                if (!inBookSearchField.hasFocus()) navigateForward();
+                if (!searchBar.hasFieldFocus()) navigateForward();
             }
         });
 
@@ -434,7 +434,16 @@ public class ReaderPanel extends JPanel {
         am.put("prevPage", new AbstractAction() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
-                if (!inBookSearchField.hasFocus()) navigateBackward();
+                if (!searchBar.hasFieldFocus()) navigateBackward();
+            }
+        });
+
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.META_DOWN_MASK), "findInBook");
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), "findInBook");
+        am.put("findInBook", new AbstractAction() {
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (zenDistractionFree) toggleZenMode();
+                searchBar.focusField();
             }
         });
 
@@ -466,8 +475,8 @@ public class ReaderPanel extends JPanel {
         currentBook = book;
         lastWheelChapterDirection = 0;
         currentContent = null;
+        chapterLayout = null;
         currentChapterPages = Collections.emptyList();
-        activeSearchHighlightTerm = "";
         tocListModel.clear();
         bookEditorPane.setText("<html><body><p style='text-align:center;'>Загружаю книгу…</p></body></html>");
         statusLeftLabel.setText("Загружаю: " + book.getTitle());
@@ -500,17 +509,9 @@ public class ReaderPanel extends JPanel {
         this.currentChapterIndex = Math.max(0, Math.min(totalChapters - 1, chapterIdx));
 
         Chapter chapter = currentContent.getChapters().get(currentChapterIndex);
-        ReaderSettings settings = storageService.getSettings();
-
-        chapterReadingMode = settings.getReadingMode();
-        if (chapterReadingMode == ReaderSettings.ReadingMode.PAGED) {
-            this.currentChapterPages = PaginationEngine.paginateChapter(
-                    chapter, settings.getCharsPerPage(), settings.isTwoColumnSpread());
-            this.currentPageIndex = Math.max(0, Math.min(currentChapterPages.size() - 1, pageIdx));
-        } else {
-            this.currentChapterPages = List.of(chapter.getHtmlContent());
-            this.currentPageIndex = 0;
-        }
+        chapterLayout = ReaderTextSearch.Layout.from(storageService.getSettings());
+        currentChapterPages = chapterLayout.pages(chapter);
+        currentPageIndex = Math.max(0, Math.min(currentChapterPages.size() - 1, pageIdx));
 
         if (tocList.getSelectedIndex() != currentChapterIndex) {
             tocList.setSelectedIndex(currentChapterIndex);
@@ -540,6 +541,7 @@ public class ReaderPanel extends JPanel {
     }
 
     private void showPageAt(int scrollOffset) {
+        clearSearch();
         currentBook.setScrollOffset(Math.max(0, scrollOffset));
         renderCurrentViewport(scrollOffset);
         saveReadingProgress();
@@ -582,18 +584,12 @@ public class ReaderPanel extends JPanel {
         styleSheet.addRule("code { font-family: monospace; background-color: " + ThemePalette.toHex(currentTheme.getSurface()) + "; }");
         styleSheet.addRule("img { max-width: 100%; height: auto; }");
 
+        removeSearchHighlight();
         bookEditorPane.setEditorKit(kit);
         bookEditorPane.setBackground(currentTheme.getCardBackground());
 
         String htmlFragment = currentChapterPages.isEmpty() ? "<p></p>" : currentChapterPages.get(currentPageIndex);
-        htmlFragment = htmlFragment
-                .replace("&nbsp;", " ")
-                .replace("&#160;", " ")
-                .replace("&shy;", "")
-                .replace("\u00A0", " ")
-                .replace("\u00AD", "")
-                .replaceAll("[ \\t\\x0B\\f\\r\\u2000-\\u200A]{2,}", " ");
-        htmlFragment = injectSavedHighlightsAndSearch(htmlFragment);
+        htmlFragment = injectSavedHighlights(ReaderHtmlKit.preparePage(htmlFragment));
 
         int viewportWidth = editorScrollPane.getViewport().getWidth();
         if (viewportWidth > 0) {
@@ -602,7 +598,8 @@ public class ReaderPanel extends JPanel {
             htmlFragment = htmlFragment.replace("<img ", "<img width='" + imgWidth + "' ");
         }
 
-        bookEditorPane.setText("<html><body>" + htmlFragment + "</body></html>");
+        bookEditorPane.setText(ReaderHtmlKit.pageHtml(htmlFragment));
+        showSearchHighlight(false);
         pageShownAt = System.nanoTime();
         var document = bookEditorPane.getDocument();
         bookEditorPane.setCaretPosition(0);
@@ -642,9 +639,9 @@ public class ReaderPanel extends JPanel {
         }
     }
 
-    private String injectSavedHighlightsAndSearch(String html) {
+    private String injectSavedHighlights(String html) {
         List<Highlight> highlights = currentBook != null ? storageService.getHighlights(currentBook.getId()) : List.of();
-        return ReaderMarkupDecorator.decorate(html, highlights, currentChapterIndex, activeSearchHighlightTerm);
+        return ReaderMarkupDecorator.decorate(html, highlights, currentChapterIndex);
     }
 
     public void navigateForward() {
@@ -681,11 +678,7 @@ public class ReaderPanel extends JPanel {
                 showPageAt(0);
             } else if (currentChapterIndex > 0) {
                 int prevChap = currentChapterIndex - 1;
-                List<String> prevPages = PaginationEngine.paginateChapter(
-                        currentContent.getChapters().get(prevChap),
-                        settings.getCharsPerPage(),
-                        settings.isTwoColumnSpread()
-                );
+                List<String> prevPages = chapterLayout.pages(currentContent.getChapters().get(prevChap));
                 goToChapterAndPage(prevChap, Math.max(0, prevPages.size() - 1));
             }
         } else {
@@ -954,37 +947,79 @@ public class ReaderPanel extends JPanel {
             });
     }
 
-    private void searchInBookNext() {
-        if (currentContent == null || currentContent.getChapters().isEmpty()) return;
-        String query = inBookSearchField.getText().trim();
-        if (query.isEmpty()) {
-            activeSearchHighlightTerm = "";
-            renderCurrentViewport();
+    private void searchInBook(ReaderTextSearch.Direction direction) {
+        if (currentChapterPages.isEmpty() || disposed) return;
+        Pattern query = ReaderTextSearch.query(searchBar.query());
+        if (query.pattern().isEmpty()) {
+            clearSearch();
             return;
         }
-        activeSearchHighlightTerm = query;
-        String lowerQ = query.toLowerCase(Locale.ROOT);
 
-        int totalCh = currentContent.getChapters().size();
-        for (int offset = 0; offset < totalCh; offset++) {
-            int chIdx = (currentChapterIndex + offset) % totalCh;
-            Chapter ch = currentContent.getChapters().get(chIdx);
-            if (ch.getPlainText().toLowerCase(Locale.ROOT).contains(lowerQ)) {
-                List<String> pages = PaginationEngine.paginateChapter(
-                        ch,
-                        storageService.getSettings().getCharsPerPage(),
-                        storageService.getSettings().isTwoColumnSpread()
-                );
-                int startPage = (offset == 0) ? (currentPageIndex + 1) : 0;
-                for (int p = startPage; p < pages.size(); p++) {
-                    if (HtmlSanitizer.htmlToPlainText(pages.get(p)).toLowerCase(Locale.ROOT).contains(lowerQ)) {
-                        goToChapterAndPage(chIdx, p);
-                        return;
-                    }
+        if (autoScrollActive) toggleAutoScroll();
+        var start = new ReaderTextSearch.Page(currentChapterIndex, currentPageIndex);
+        int previous = searchMatch == null ? -1 : searchMatch.occurrence();
+        List<Chapter> chapters = currentContent.getChapters();
+        var layout = chapterLayout;
+        searchBar.setStatus("Поиск…");
+        searchRequest.start(() -> ReaderTextSearch.find(chapters, layout, query, start, previous, direction), match -> {
+            if (match == null) {
+                searchBar.setStatus("Совпадений нет");
+                return;
+            }
+            if (!match.page().equals(start)) goToChapterAndPage(match.page().chapter(), match.page().index());
+            searchMatch = match;
+            searchPattern = query;
+            searchBar.setStatus(match.wrapped() ? "Поиск по кругу" : "");
+            var document = bookEditorPane.getDocument();
+            SwingUtilities.invokeLater(() -> {
+                if (searchMatch == match && bookEditorPane.getDocument() == document) showSearchHighlight(true);
+            });
+        }, error -> {
+            Logger.getLogger(ReaderPanel.class.getName()).log(Level.WARNING, "Ошибка поиска в книге", error);
+            searchBar.setStatus("Ошибка поиска");
+        });
+    }
+
+    private void clearSearch() {
+        searchRequest.cancel();
+        searchMatch = null;
+        searchPattern = null;
+        searchBar.setStatus("");
+        removeSearchHighlight();
+    }
+
+    private void removeSearchHighlight() {
+        if (searchHighlight != null) {
+            bookEditorPane.getHighlighter().removeHighlight(searchHighlight);
+            searchHighlight = null;
+        }
+    }
+
+    private void showSearchHighlight(boolean reveal) {
+        removeSearchHighlight();
+        if (searchMatch == null) return;
+        try {
+            var range = ReaderTextSearch.locate(bookEditorPane.getDocument(), searchPattern, searchMatch.occurrence());
+            if (range == null) {
+                searchBar.setStatus("Не удалось выделить текст");
+                return;
+            }
+            Color color = currentTheme.isDark() ? new Color(37, 74, 133) : new Color(250, 204, 21);
+            searchHighlight = bookEditorPane.getHighlighter().addHighlight(range.start(), range.end(),
+                    new DefaultHighlighter.DefaultHighlightPainter(color));
+            if (reveal) {
+                var view = bookEditorPane.modelToView2D(range.start());
+                if (view != null && !bookEditorPane.getVisibleRect().contains(view.getBounds())) {
+                    restoreScrollTimer.stop();
+                    pendingScrollOffset = null;
+                    int center = view.getBounds().y - editorScrollPane.getViewport().getHeight() / 3;
+                    SmoothScrollUtil.resetScroll(editorScrollPane, Math.max(0, center));
                 }
             }
+        } catch (BadLocationException error) {
+            Logger.getLogger(ReaderPanel.class.getName()).log(Level.WARNING, "Ошибка выделения в книге", error);
+            searchBar.setStatus("Не удалось выделить текст");
         }
-        JOptionPane.showMessageDialog(this, "Совпадений по запросу «" + query + "» больше не найдено.");
     }
 
     public void openTypographyAndThemeDialog() {
@@ -995,8 +1030,8 @@ public class ReaderPanel extends JPanel {
     }
 
     private void refreshReadingLayout() {
-        if (currentBook == null || currentContent == null) return;
-        boolean sameMode = chapterReadingMode == storageService.getSettings().getReadingMode();
+        if (currentBook == null || chapterLayout == null) return;
+        boolean sameMode = chapterLayout.mode() == storageService.getSettings().getReadingMode();
         goToChapterAndPage(currentChapterIndex, currentPageIndex, sameMode ? currentBook.getScrollOffset() : 0);
     }
 
@@ -1004,6 +1039,7 @@ public class ReaderPanel extends JPanel {
         if (saveScrollTimer.isRunning()) saveReadingProgress();
         bookLoader.cancel();
         dictionaryLookup.cancel();
+        clearSearch();
         if (autoScrollActive) {
             toggleAutoScroll();
         }
@@ -1033,8 +1069,8 @@ public class ReaderPanel extends JPanel {
         bottomStatusBar.setBackground(theme.getSurface());
         statusLeftLabel.setForeground(theme.getTextSecondary());
         statusRightLabel.setForeground(theme.getTextPrimary());
-        ModernUiFactory.styleTextField(inBookSearchField, theme);
-        if (currentContent != null && chapterReadingMode != storageService.getSettings().getReadingMode()) {
+        searchBar.applyTheme(theme);
+        if (currentContent != null && chapterLayout != null && !chapterLayout.equals(ReaderTextSearch.Layout.from(storageService.getSettings()))) {
             goToChapterAndPage(currentChapterIndex, currentPageIndex);
         } else {
             renderCurrentViewport();

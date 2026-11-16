@@ -55,6 +55,19 @@ final class ReaderHtmlKit extends HTMLEditorKit {
         };
     }
 
+    static String pageHtml(String fragment) {
+        return "<html><body>" + fragment + "</body></html>";
+    }
+
+    static String preparePage(String fragment) {
+        return fragment.replace("&nbsp;", " ")
+                .replace("&#160;", " ")
+                .replace("&shy;", "")
+                .replace("\u00A0", " ")
+                .replace("\u00AD", "")
+                .replaceAll("[ \\t\\x0B\\f\\r\\u2000-\\u200A]{2,}", " ");
+    }
+
     @Override public ViewFactory getViewFactory() { return viewFactory; }
 
     @Override protected Parser getParser() {
