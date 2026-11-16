@@ -64,3 +64,9 @@ Maven запускает автономные регрессионные про�
    * Поиск и чтение манги/манхвы по трём источникам: **MangaLib (RU)**, **Remanga (RU)** и **MangaDex (EN/RU)**.
    * Выбор языка глав (русский/английский), ридер в режимах «вебтун-лента» (бесшовный скролл) или «постранично» (листание ←/→).
    * Кнопки «предыдущая / следующая глава», отдельные списки избранной манги и истории чтения.
+
+## Лицензия
+
+Условия использования LuminaRead указаны в файле [LICENSE](LICENSE). В собранном JAR этот файл находится в `META-INF/LICENSE`.
+
+Декодер WebP TwelveMonkeys распространяется на условиях BSD-3-Clause. Исходные уведомления [TwelveMonkeys 3.15.0](https://github.com/haraldk/TwelveMonkeys/tree/twelvemonkeys-3.15.0) лежат в [licenses/twelvemonkeys](licenses/twelvemonkeys) и включены в JAR в `META-INF/licenses/twelvemonkeys/`.
