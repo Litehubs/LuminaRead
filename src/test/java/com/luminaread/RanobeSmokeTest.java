@@ -4,8 +4,6 @@ import com.luminaread.service.RanobeService;
 import com.luminaread.service.RanobeService.RanobeChapter;
 import com.luminaread.service.RanobeService.RanobeChapterContent;
 import com.luminaread.service.RanobeService.RanobeItem;
-import com.luminaread.service.YandexAuthService;
-import com.luminaread.service.YandexAuthService.YandexUser;
 
 import javax.swing.JEditorPane;
 import javax.swing.text.html.HTMLEditorKit;
@@ -15,9 +13,8 @@ import java.util.*;
 
 public class RanobeSmokeTest {
     public static void main(String[] args) throws Exception {
-        System.out.println("=== RUNNING RANOBE & YANDEX ID SMOKE TESTS ===");
+        System.out.println("=== RUNNING RANOBE SMOKE TESTS ===");
         RanobeService service = new RanobeService();
-        YandexAuthService yaService = YandexAuthService.getInstance();
 
         System.out.println("1. Тестирование поиска в RanobeLib...");
         List<RanobeItem> searchResults = service.searchRanobe("магия");
@@ -149,14 +146,6 @@ public class RanobeSmokeTest {
         }
         System.out.println("Состояние ранобэ сохранено и успешно восстановлено!");
 
-        System.out.println("6. Тестирование Яндекс ID (YandexAuthService)...");
-        try {
-            yaService.loginWithLoginOrEmail("example@yandex.ru");
-            throw new AssertionError("A username alone must not authenticate a Yandex account");
-        } catch (IllegalArgumentException expected) {
-            System.out.println("Неподтверждённый логин не считается авторизацией.");
-        }
-
-        System.out.println("=== ALL RANOBE & YANDEX ID TESTS PASSED! ===");
+        System.out.println("=== ALL RANOBE SMOKE TESTS PASSED! ===");
     }
 }

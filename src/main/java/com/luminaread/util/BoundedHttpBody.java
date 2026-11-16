@@ -1,4 +1,4 @@
-package com.luminaread.service.catalog;
+package com.luminaread.util;
 
 import java.io.IOException;
 import java.net.http.HttpResponse;
@@ -7,19 +7,25 @@ import java.util.List;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
 
-/** Stops reading an oversized feed before the entire body is buffered. */
-public final class CatalogResponseBody implements HttpResponse.BodySubscriber<byte[]> {
-    private static final int MAX_BYTES = 4 * 1024 * 1024;
+/** Stops reading an oversized HTTP response before the entire body is buffered. */
+public final class BoundedHttpBody implements HttpResponse.BodySubscriber<byte[]> {
+    public static final class LimitExceededException extends IOException {
+        private LimitExceededException(String message) { super(message); }
+    }
 
     private final HttpResponse.BodySubscriber<byte[]> body = HttpResponse.BodySubscribers.ofByteArray();
     private Flow.Subscription subscription;
-    private int remaining = MAX_BYTES;
+    private int remaining;
+    private final String overflowMessage;
     private boolean rejected;
 
-    private CatalogResponseBody() {}
+    private BoundedHttpBody(int maxBytes, String overflowMessage) {
+        remaining = maxBytes;
+        this.overflowMessage = overflowMessage;
+    }
 
-    public static HttpResponse.BodyHandler<byte[]> bounded() {
-        return response -> new CatalogResponseBody();
+    public static HttpResponse.BodyHandler<byte[]> bounded(int maxBytes, String overflowMessage) {
+        return response -> new BoundedHttpBody(maxBytes, overflowMessage);
     }
 
     @Override public CompletionStage<byte[]> getBody() {
@@ -37,7 +43,7 @@ public final class CatalogResponseBody implements HttpResponse.BodySubscriber<by
             if (buffer.remaining() > remaining) {
                 rejected = true;
                 subscription.cancel();
-                body.onError(new IOException("Ответ каталога превышает допустимый размер."));
+                body.onError(new LimitExceededException(overflowMessage));
                 return;
             }
             remaining -= buffer.remaining();

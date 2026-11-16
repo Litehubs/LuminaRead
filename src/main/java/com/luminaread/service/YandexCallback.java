@@ -14,7 +14,10 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Short-lived local callback for one OAuth authorization attempt. */
 public final class YandexCallback implements AutoCloseable {
@@ -26,7 +29,8 @@ public final class YandexCallback implements AutoCloseable {
     private final HttpServer server;
     private final String state;
     private final CompletableFuture<String> result = new CompletableFuture<>();
-    private final java.util.concurrent.atomic.AtomicBoolean accepted = new java.util.concurrent.atomic.AtomicBoolean();
+    private final AtomicBoolean accepted = new AtomicBoolean();
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private YandexCallback(HttpServer server, String state) {
         this.server = server;
@@ -46,7 +50,16 @@ public final class YandexCallback implements AutoCloseable {
     public URI redirectUri() { return URI.create("http://127.0.0.1:" + server.getAddress().getPort() + PATH); }
     public String state() { return state; }
 
-    public String awaitCode() throws Exception { return result.get(5, TimeUnit.MINUTES); }
+    public String awaitCode() throws IOException, InterruptedException {
+        try {
+            return result.get(5, TimeUnit.MINUTES);
+        } catch (TimeoutException ex) {
+            throw new IOException("Яндекс не вернул код за пять минут. Начните вход заново.");
+        } catch (ExecutionException ex) {
+            if (ex.getCause() instanceof IOException error) throw error;
+            throw new IOException("Не удалось завершить вход через Яндекс ID.");
+        }
+    }
 
     private void handle(HttpExchange exchange) throws IOException {
         int status = 400;
@@ -96,13 +109,15 @@ public final class YandexCallback implements AutoCloseable {
                 try (var output = exchange.getResponseBody()) { output.write(body); }
             } finally {
                 if (acceptedCode != null) result.complete(acceptedCode);
-                else if (acceptedError) result.completeExceptionally(new IllegalStateException("Вход не подтверждён в Яндексе."));
+                else if (acceptedError) result.completeExceptionally(new IOException("Вход не подтверждён в Яндексе."));
             }
         }
     }
 
     @Override public void close() {
-        result.completeExceptionally(new IllegalStateException("Авторизация отменена."));
-        server.stop(0);
+        if (closed.compareAndSet(false, true)) {
+            result.completeExceptionally(new IOException("Авторизация отменена."));
+            server.stop(0);
+        }
     }
 }
