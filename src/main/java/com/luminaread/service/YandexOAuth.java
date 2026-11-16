@@ -1,5 +1,6 @@
 package com.luminaread.service;
 
+import com.luminaread.service.YandexAuthService.Profile;
 import com.luminaread.util.BoundedHttpBody;
 import com.luminaread.util.Json;
 
@@ -16,32 +17,37 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-final class YandexOAuthClient {
+final class YandexOAuth {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final HttpResponse.BodyHandler<byte[]> BODY =
             BoundedHttpBody.bounded(64 * 1024, "Слишком большой ответ Яндекса.");
 
     private final String clientId;
-    private final URI tokenEndpoint;
-    private final URI profileEndpoint;
+    private final URI tokenUrl;
+    private final URI profileUrl;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(TIMEOUT)
             .followRedirects(HttpClient.Redirect.NEVER).build();
 
-    YandexOAuthClient(String clientId) {
+    YandexOAuth(String clientId) {
         this(clientId, URI.create("https://oauth.yandex.ru/token"), URI.create("https://login.yandex.ru/info?format=json"));
     }
 
-    YandexOAuthClient(String clientId, URI tokenEndpoint, URI profileEndpoint) {
+    YandexOAuth(String clientId, URI tokenUrl, URI profileUrl) {
         this.clientId = clientId;
-        this.tokenEndpoint = tokenEndpoint;
-        this.profileEndpoint = profileEndpoint;
+        this.tokenUrl = tokenUrl;
+        this.profileUrl = profileUrl;
     }
 
-    YandexAuthService.YandexUser verify(String code, String verifier, URI redirect) throws IOException, InterruptedException {
+    YandexPkce newPkce() throws IOException {
+        if (clientId.isBlank()) throw new IOException("Не задан идентификатор приложения Яндекс ID.");
+        return YandexPkce.create(clientId);
+    }
+
+    Profile verify(String code, String verifier, URI redirect) throws IOException, InterruptedException {
         String body = "grant_type=authorization_code&code=" + form(code)
                 + "&client_id=" + form(clientId) + "&code_verifier=" + form(verifier)
                 + "&redirect_uri=" + form(redirect.toString());
-        HttpResponse<byte[]> exchange = send(HttpRequest.newBuilder(tokenEndpoint)
+        HttpResponse<byte[]> exchange = send(HttpRequest.newBuilder(tokenUrl)
                 .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
                 .POST(HttpRequest.BodyPublishers.ofString(body)));
         if (exchange.statusCode() != 200) throw exchangeFailure(exchange);
@@ -50,7 +56,7 @@ final class YandexOAuthClient {
             throw new IOException("Яндекс вернул недопустимый OAuth-токен.");
         }
 
-        HttpResponse<byte[]> profile = send(HttpRequest.newBuilder(profileEndpoint)
+        HttpResponse<byte[]> profile = send(HttpRequest.newBuilder(profileUrl)
                 .header("Authorization", "OAuth " + token).GET());
         if (profile.statusCode() != 200) {
             throw new IOException("Яндекс ID не подтвердил профиль (HTTP " + profile.statusCode() + ").");
@@ -60,7 +66,7 @@ final class YandexOAuthClient {
         if (id.isBlank() || !clientId.equals(fields.get("client_id"))) {
             throw new IOException("Яндекс ID не подтвердил профиль для LuminaRead.");
         }
-        return new YandexAuthService.YandexUser(id, text(fields.get("login")), text(fields.get("display_name")),
+        return new Profile(id, text(fields.get("login")), text(fields.get("display_name")),
                 text(fields.get("default_email")));
     }
 

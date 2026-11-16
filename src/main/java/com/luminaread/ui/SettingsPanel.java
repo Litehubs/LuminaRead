@@ -85,7 +85,7 @@ public class SettingsPanel extends JPanel {
         add(mainScroll, BorderLayout.CENTER);
 
         applyTheme(currentTheme);
-        yandex.addAuthListener(authListener);
+        yandex.addListener(authListener);
     }
 
     private void buildFullSettingsSections() {
@@ -426,7 +426,7 @@ public class SettingsPanel extends JPanel {
     }
 
     void disposeResources() {
-        yandex.removeAuthListener(authListener);
+        yandex.removeListener(authListener);
         downloads.disposeResources();
     }
 
