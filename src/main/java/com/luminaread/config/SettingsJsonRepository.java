@@ -1,8 +1,10 @@
 package com.luminaread.config;
 
 import com.luminaread.util.Json;
+import com.luminaread.util.AtomicFile;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -85,8 +87,11 @@ public class SettingsJsonRepository {
             }
 
             sb.append("}\n");
-            Files.writeString(targetPath, sb.toString(), StandardCharsets.UTF_8);
-        } catch (Exception ignored) {}
+            byte[] content = sb.toString().getBytes(StandardCharsets.UTF_8);
+            AtomicFile.write(targetPath, output -> output.write(content));
+        } catch (IOException ex) {
+            throw new UncheckedIOException("Не удалось сохранить настройки: " + targetPath, ex);
+        }
     }
 
     public synchronized boolean load(ReaderDisplayConfig display, OpdsCatalogConfig opds) {
@@ -98,8 +103,13 @@ public class SettingsJsonRepository {
         try {
             String text = Files.readString(sourcePath, StandardCharsets.UTF_8);
             Object parsed = Json.parse(text);
-            if (!(parsed instanceof Map)) return false;
-            Map<?, ?> root = (Map<?, ?>) parsed;
+            if (!(parsed instanceof Map<?, ?> root)) throw new IllegalArgumentException("Ожидался объект настроек");
+            verifySection(root, "display");
+            verifySection(root, "opds");
+            if (root.get("opds") instanceof Map<?, ?> section && section.containsKey("catalogs")
+                    && !(section.get("catalogs") instanceof List<?>)) {
+                throw new IllegalArgumentException("Ожидался список каталогов OPDS");
+            }
 
             if (display != null && root.containsKey("display")) {
                 Object dispObj = root.get("display");
@@ -116,12 +126,18 @@ public class SettingsJsonRepository {
                     if (dm.get("textAlignment") != null) {
                         try {
                             display.setTextAlignment(ReaderDisplayConfig.TextAlignment.valueOf(String.valueOf(dm.get("textAlignment"))));
-                        } catch (Exception ignored) {}
+                        } catch (IllegalArgumentException ex) {
+                            java.util.logging.Logger.getLogger(SettingsJsonRepository.class.getName())
+                                    .log(java.util.logging.Level.FINE, "Неизвестное выравнивание текста; сохранено прежнее", ex);
+                        }
                     }
                     if (dm.get("readingMode") != null) {
                         try {
                             display.setReadingMode(ReaderDisplayConfig.ReadingMode.valueOf(String.valueOf(dm.get("readingMode"))));
-                        } catch (Exception ignored) {}
+                        } catch (IllegalArgumentException ex) {
+                            java.util.logging.Logger.getLogger(SettingsJsonRepository.class.getName())
+                                    .log(java.util.logging.Level.FINE, "Неизвестный режим чтения; сохранён прежний", ex);
+                        }
                     }
                     if (dm.get("twoColumnSpread") != null) display.setTwoColumnSpread(Boolean.parseBoolean(String.valueOf(dm.get("twoColumnSpread"))));
                     if (dm.get("charsPerPage") != null) display.setCharsPerPage(asInt(dm.get("charsPerPage"), display.getCharsPerPage()));
@@ -148,28 +164,32 @@ public class SettingsJsonRepository {
                 }
             }
             return true;
-        } catch (Exception e) {
+        } catch (IOException | IllegalArgumentException e) {
+            java.util.logging.Logger.getLogger(SettingsJsonRepository.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Не удалось прочитать настройки", e);
             return false;
         }
     }
 
-    private static int asInt(Object val, int def) {
-        if (val == null) return def;
-        try {
-            if (val instanceof Number) return ((Number) val).intValue();
-            return (int) Double.parseDouble(val.toString());
-        } catch (Exception e) {
-            return def;
+    private static void verifySection(Map<?, ?> root, String name) {
+        if (root.containsKey(name) && !(root.get(name) instanceof Map<?, ?>)) {
+            throw new IllegalArgumentException("Некорректный раздел настроек: " + name);
         }
     }
 
-    private static double asDouble(Object val, double def) {
-        if (val == null) return def;
+    private static int asInt(Object value, int fallback) {
+        double number = asDouble(value, Double.NaN);
+        return !Double.isFinite(number) || number < Integer.MIN_VALUE || number > Integer.MAX_VALUE
+                ? fallback : (int) number;
+    }
+
+    private static double asDouble(Object value, double fallback) {
+        if (value == null) return fallback;
         try {
-            if (val instanceof Number) return ((Number) val).doubleValue();
-            return Double.parseDouble(val.toString());
-        } catch (Exception e) {
-            return def;
+            double number = value instanceof Number numeric ? numeric.doubleValue() : Double.parseDouble(value.toString());
+            return Double.isFinite(number) ? number : fallback;
+        } catch (NumberFormatException expected) {
+            return fallback;
         }
     }
 

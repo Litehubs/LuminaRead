@@ -212,12 +212,12 @@ public class LibraryPanel extends JPanel {
         infoPanel.setLayout(new BoxLayout(infoPanel, BoxLayout.Y_AXIS));
         infoPanel.setOpaque(false);
 
-        JLabel titleLbl = new JLabel(book.getTitle());
+        JLabel titleLbl = ModernUiFactory.plainTextLabel(book.getTitle());
         titleLbl.setFont(ModernUiFactory.uiFont(Font.BOLD, 15));
         titleLbl.setForeground(currentTheme.getTextPrimary());
         titleLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel authorLbl = new JLabel(book.getAuthor()
+        JLabel authorLbl = ModernUiFactory.plainTextLabel(book.getAuthor()
                 + (book.getSeries().isEmpty() ? "" : " • " + book.getSeries()));
         authorLbl.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         authorLbl.setForeground(currentTheme.getTextSecondary());
@@ -225,7 +225,7 @@ public class LibraryPanel extends JPanel {
 
         String metaStr = String.format("Формат: %s  |  Слов: %,d  |  Прочитано: %.0f%%",
                 book.getFormat(), book.getTotalWords(), book.getProgressPercent());
-        JLabel metaLbl = new JLabel(metaStr);
+        JLabel metaLbl = ModernUiFactory.plainTextLabel(metaStr);
         metaLbl.setFont(ModernUiFactory.uiFont(Font.PLAIN, 12));
         metaLbl.setForeground(currentTheme.getTextSecondary());
         metaLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -250,7 +250,7 @@ public class LibraryPanel extends JPanel {
                 book.isFavorite() ? "В избранном" : "В избранное", currentTheme);
         favBtn.addActionListener(e -> {
             book.setFavorite(!book.isFavorite());
-            storageService.saveState();
+            UiPersistenceErrors.save(this, "Не удалось сохранить изменение избранного.", storageService::saveState);
             refreshBooksGrid();
         });
 
@@ -263,8 +263,17 @@ public class LibraryPanel extends JPanel {
                     "Убрать книгу «" + book.getTitle() + "» из библиотеки?",
                     "Удаление книги", JOptionPane.YES_NO_OPTION);
             if (ans == JOptionPane.YES_OPTION) {
-                storageService.removeBook(book, false);
-                refreshBooksGrid();
+                try {
+                    storageService.removeBook(book, false);
+                } catch (java.io.UncheckedIOException ex) {
+                    java.util.logging.Logger.getLogger(LibraryPanel.class.getName())
+                            .log(java.util.logging.Level.WARNING, "Не удалось полностью сохранить изменение библиотеки", ex);
+                    JOptionPane.showMessageDialog(this,
+                            "Не удалось полностью сохранить изменение библиотеки. Проверьте состояние книги и настройки.\n" + ex.getMessage(),
+                            "Ошибка сохранения", JOptionPane.ERROR_MESSAGE);
+                } finally {
+                    refreshBooksGrid();
+                }
             }
         });
 
@@ -416,7 +425,9 @@ public class LibraryPanel extends JPanel {
                         })
                         .toList();
                 importFiles(bookPaths.stream().map(Path::toFile).toArray(File[]::new), false);
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                java.util.logging.Logger.getLogger(LibraryPanel.class.getName())
+                        .log(java.util.logging.Level.WARNING, "Не удалось прочитать папку для импорта", ex);
                 JOptionPane.showMessageDialog(this, "Не удалось прочитать выбранную папку.",
                         "Ошибка импорта", JOptionPane.ERROR_MESSAGE);
             }

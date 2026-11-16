@@ -6,6 +6,7 @@ import com.luminaread.model.Chapter;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -16,6 +17,10 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 public class CbzParser implements BookParser {
+    private static final long MAX_ARCHIVE_BYTES = 512L * 1024 * 1024;
+    private static final long MAX_ENTRY_BYTES = 32L * 1024 * 1024;
+    private static final long MAX_EXPANDED_BYTES = 256L * 1024 * 1024;
+    private static final int MAX_ENTRIES = 10000;
 
     @Override
     public boolean supports(File file, String formatHint) {
@@ -43,45 +48,78 @@ public class CbzParser implements BookParser {
         content.setTitle(baseTitle);
         content.setAuthor("Комикс / Иллюстрированное издание");
 
-        Path cacheDir = Path.of(System.getProperty("user.home"), ".luminaread", "cache",
-                "cbz_" + file.getName().replaceAll("[^a-zA-Z0-9._\\-]", "_"));
-        Files.createDirectories(cacheDir);
+        if (Files.size(file.toPath()) > MAX_ARCHIVE_BYTES) {
+            throw new IOException("Размер файла CBZ превышает допустимый предел");
+        }
+        Path cacheRoot = Path.of(System.getProperty("user.home"), ".luminaread", "cache");
+        Files.createDirectories(cacheRoot);
+        Path cacheDir = Files.createTempDirectory(cacheRoot, "cbz_");
+        cacheDir.toFile().deleteOnExit();
 
-         record PageImg(String name, byte[] bytes, Path savedPath) {}
+        record PageImg(String name, Path savedPath) {}
         List<PageImg> pages = new ArrayList<>();
+        byte[] cover = null;
+        String coverName = null;
+        long total = 0;
+        int entries = 0;
+        boolean completed = false;
 
-        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(file))) {
+        try {
+          try (ZipInputStream zis = new ZipInputStream(new FileInputStream(file))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory()) continue;
+                if (++entries > MAX_ENTRIES) throw new IOException("Слишком много файлов в CBZ");
                 String lower = entry.getName().toLowerCase(Locale.ROOT);
-                if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
-                        || lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".avif")) {
-                    ByteArrayOutputStream bos = new ByteArrayOutputStream(32768);
-                    byte[] buf = new byte[8192];
-                    int r;
-                    while ((r = zis.read(buf)) != -1) {
-                        bos.write(buf, 0, r);
-                    }
+                boolean image = !entry.isDirectory() && (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
+                        || lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".avif"));
+                ByteArrayOutputStream bos = image ? new ByteArrayOutputStream(32768) : null;
+                byte[] buf = new byte[8192];
+                int r;
+                long entrySize = 0;
+                while ((r = zis.read(buf)) != -1) {
+                    if (r > MAX_ENTRY_BYTES - entrySize || r > MAX_EXPANDED_BYTES - total)
+                        throw new IOException("Размер распакованного CBZ превышает допустимый предел");
+                    if (bos != null) bos.write(buf, 0, r);
+                    entrySize += r;
+                    total += r;
+                }
+                if (image) {
                     byte[] imgBytes = bos.toByteArray();
-                    String safeName = entry.getName().replace('/', '_').replace('\\', '_');
+                    if (coverName == null || String.CASE_INSENSITIVE_ORDER.compare(entry.getName(), coverName) < 0) {
+                        coverName = entry.getName();
+                        cover = imgBytes;
+                    }
+                    String extension = lower.substring(lower.lastIndexOf('.'));
+                    String safeName = String.format(Locale.ROOT, "%08d", entries) + extension;
 
                     if (lower.endsWith(".webp") || lower.endsWith(".avif")) {
                         safeName = safeName.replaceAll("(?i)\\.(webp|avif)$", ".png");
                         var bi = com.luminaread.service.MediaCacheService.getInstance().decodeBytes(imgBytes);
                         Path target = cacheDir.resolve(safeName);
+                        target.toFile().deleteOnExit();
                         if (bi != null) {
                             javax.imageio.ImageIO.write(bi, "png", target.toFile());
-                            pages.add(new PageImg(entry.getName(), imgBytes, target));
+                            pages.add(new PageImg(entry.getName(), target));
                         } else {
                             Files.write(target, imgBytes);
-                            pages.add(new PageImg(entry.getName(), imgBytes, target));
+                            pages.add(new PageImg(entry.getName(), target));
                         }
                     } else {
                         Path target = cacheDir.resolve(safeName);
+                        target.toFile().deleteOnExit();
                         Files.write(target, imgBytes);
-                        pages.add(new PageImg(entry.getName(), imgBytes, target));
+                        pages.add(new PageImg(entry.getName(), target));
                     }
+                }
+            }
+          }
+          completed = true;
+        } finally {
+            if (!completed) {
+                try (var files = Files.list(cacheDir)) {
+                    for (Path cached : files.toList()) Files.deleteIfExists(cached);
+                } finally {
+                    Files.deleteIfExists(cacheDir);
                 }
             }
         }
@@ -89,7 +127,7 @@ public class CbzParser implements BookParser {
         pages.sort(Comparator.comparing(PageImg::name, String.CASE_INSENSITIVE_ORDER));
 
         if (!pages.isEmpty()) {
-            content.setCoverImage(pages.get(0).bytes());
+            content.setCoverImage(cover);
         }
 
         int index = 0;

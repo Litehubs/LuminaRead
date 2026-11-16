@@ -3,8 +3,6 @@ package com.luminaread.ui;
 import com.luminaread.model.Book;
 import com.luminaread.model.DownloadTask;
 import com.luminaread.model.ReaderSettings;
-import com.luminaread.service.LibAccountService;
-import com.luminaread.service.LibAccountService.LibUser;
 import com.luminaread.service.ITtsService;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
@@ -32,7 +30,6 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -119,7 +116,7 @@ public class SettingsPanel extends JPanel {
         mainContainer.add(pageTitle);
         mainContainer.add(Box.createVerticalStrut(14));
 
-        JPanel downloadsSection = createSectionCard("1. Центр загрузок книг (прогресс скачивания в %)");
+        JPanel downloadsSection = createSectionCard("Загрузки книг");
 
         JPanel quickDlBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         quickDlBar.setOpaque(false);
@@ -150,9 +147,9 @@ public class SettingsPanel extends JPanel {
         mainContainer.add(downloadsSection);
         mainContainer.add(Box.createVerticalStrut(16));
 
-        JPanel themeSection = createSectionCard("2. Цветовая тема оформления и Защита зрения");
+        JPanel themeSection = createSectionCard("Тема оформления и защита зрения");
 
-        JLabel themeHint = new JLabel("Выберите тему оформления (применяется мгновенно ко всему приложению и читалке):");
+        JLabel themeHint = new JLabel("Выберите тему оформления:");
         themeHint.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         themeHint.setForeground(currentTheme.getTextSecondary());
         themeHint.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -181,17 +178,17 @@ public class SettingsPanel extends JPanel {
             int val = brightSlider.getValue();
             brightValLbl.setText("Яркость страницы: " + val + "%");
             s.setDimmerOpacity((100 - val) / 100.0);
-            storageService.saveState();
+            if (!brightSlider.getValueIsAdjusting()) saveSettings();
             onSettingsUpdated.run();
         });
 
-        JCheckBox warmFilterCheck = new JCheckBox("Теплый янтарный светофильтр (Защита глаз для ночного чтения)", s.isWarmEyeCareFilter());
+        JCheckBox warmFilterCheck = new JCheckBox("Тёплый светофильтр", s.isWarmEyeCareFilter());
         warmFilterCheck.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         warmFilterCheck.setForeground(currentTheme.getTextPrimary());
         warmFilterCheck.setOpaque(false);
         warmFilterCheck.addActionListener(e -> {
             s.setWarmEyeCareFilter(warmFilterCheck.isSelected());
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
@@ -203,7 +200,7 @@ public class SettingsPanel extends JPanel {
         mainContainer.add(themeSection);
         mainContainer.add(Box.createVerticalStrut(16));
 
-        JPanel typoSection = createSectionCard("3. Типографика, Шрифты и Верстка страниц (Moon+ Pro)");
+        JPanel typoSection = createSectionCard("Шрифт и оформление страницы");
 
         JPanel typoGrid = new JPanel(new GridLayout(0, 2, 16, 10));
         typoGrid.setOpaque(false);
@@ -217,7 +214,7 @@ public class SettingsPanel extends JPanel {
         fontCombo.setSelectedItem(s.getFontFamily());
         fontCombo.addActionListener(e -> {
             s.setFontFamily((String) fontCombo.getSelectedItem());
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
@@ -230,12 +227,12 @@ public class SettingsPanel extends JPanel {
             int scaledChars = Math.max(900, Math.min(4800, (int) (2400.0 * 19.0 / s.getFontSize())));
             if (s.isTwoColumnSpread()) scaledChars = (int) (scaledChars * 0.85);
             s.setCharsPerPage(scaledChars);
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
         JComboBox<String> lineHeightCombo = new JComboBox<>(new String[]{
-                "1.2 (Плотное)", "1.4 (Стандартное)", "1.6 (Комфортное)", "1.8 (Воздушное)", "2.0 (Двойной интервал)"
+                "1.2 — плотный", "1.4 — стандартный", "1.6 — комфортный", "1.8 — свободный", "2.0 — двойной"
         });
         lineHeightCombo.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         int lhIndex = (int) Math.round((s.getLineHeight() - 1.2) / 0.2);
@@ -243,7 +240,7 @@ public class SettingsPanel extends JPanel {
         lineHeightCombo.addActionListener(e -> {
             double[] lhValues = {1.2, 1.4, 1.6, 1.8, 2.0};
             s.setLineHeight(lhValues[Math.max(0, lineHeightCombo.getSelectedIndex())]);
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
@@ -253,7 +250,7 @@ public class SettingsPanel extends JPanel {
         paraSpacingSlider.addChangeListener(e -> {
             s.setParagraphSpacingPx(paraSpacingSlider.getValue());
             paraSpacingLbl.setText("Отступ между абзацами: " + s.getParagraphSpacingPx() + " px");
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
@@ -263,12 +260,12 @@ public class SettingsPanel extends JPanel {
         marginSlider.addChangeListener(e -> {
             s.setHorizontalMarginPx(marginSlider.getValue());
             marginLbl.setText("Боковые поля страницы: " + s.getHorizontalMarginPx() + " px");
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
         JComboBox<String> alignCombo = new JComboBox<>(new String[]{
-                "По левому краю (Ровные пробелы без растяжения)", "По ширине страницы (Justify)"
+                "По левому краю", "По ширине"
         });
         alignCombo.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         alignCombo.setSelectedIndex(s.getTextAlignment() == ReaderSettings.TextAlignment.LEFT ? 0 : 1);
@@ -276,12 +273,12 @@ public class SettingsPanel extends JPanel {
             s.setTextAlignment(alignCombo.getSelectedIndex() == 0
                     ? ReaderSettings.TextAlignment.LEFT
                     : ReaderSettings.TextAlignment.JUSTIFY);
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
         JComboBox<String> modeCombo = new JComboBox<>(new String[]{
-                "Постраничный режим (Листание страниц)", "Плавный вертикальный свиток (Скролл)"
+                "Постранично", "Непрерывная прокрутка"
         });
         modeCombo.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         modeCombo.setSelectedIndex(s.getReadingMode() == ReaderSettings.ReadingMode.PAGED ? 0 : 1);
@@ -289,17 +286,17 @@ public class SettingsPanel extends JPanel {
             s.setReadingMode(modeCombo.getSelectedIndex() == 0
                     ? ReaderSettings.ReadingMode.PAGED
                     : ReaderSettings.ReadingMode.SCROLL);
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
-        JCheckBox twoColCheck = new JCheckBox("Включить двухколоночный разворот (2 страницы рядом)", s.isTwoColumnSpread());
+        JCheckBox twoColCheck = new JCheckBox("Две страницы рядом", s.isTwoColumnSpread());
         twoColCheck.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         twoColCheck.setForeground(currentTheme.getTextPrimary());
         twoColCheck.setOpaque(false);
         twoColCheck.addActionListener(e -> {
             s.setTwoColumnSpread(twoColCheck.isSelected());
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
@@ -324,7 +321,7 @@ public class SettingsPanel extends JPanel {
         mainContainer.add(typoSection);
         mainContainer.add(Box.createVerticalStrut(16));
 
-        JPanel controlSection = createSectionCard("4. Управление, Автопрокрутка, Голосовое чтение (TTS) и Память");
+        JPanel controlSection = createSectionCard("Управление и чтение вслух");
 
         JPanel controlGrid = new JPanel(new GridLayout(0, 2, 16, 10));
         controlGrid.setOpaque(false);
@@ -337,25 +334,25 @@ public class SettingsPanel extends JPanel {
         autoScrollSlider.addChangeListener(e -> {
             s.setAutoScrollSpeed(autoScrollSlider.getValue());
             autoScrollLbl.setText("Скорость плавной автопрокрутки: " + s.getAutoScrollSpeed() + " px/с");
-            storageService.saveState();
+            saveSettings();
         });
 
-        JLabel ttsRateLbl = createSettingLabel("Скорость голосовой озвучки (TTS): " + s.getTtsRateWpm() + " слов/мин");
+        JLabel ttsRateLbl = createSettingLabel("Скорость чтения вслух: " + s.getTtsRateWpm() + " слов/мин");
         JSlider ttsRateSlider = new JSlider(100, 310, s.getTtsRateWpm());
         ttsRateSlider.setOpaque(false);
         ttsRateSlider.addChangeListener(e -> {
             s.setTtsRateWpm(ttsRateSlider.getValue());
-            ttsRateLbl.setText("Скорость голосовой озвучки (TTS): " + s.getTtsRateWpm() + " слов/мин");
-            storageService.saveState();
+            ttsRateLbl.setText("Скорость чтения вслух: " + s.getTtsRateWpm() + " слов/мин");
+            saveSettings();
         });
 
-        JCheckBox tapZonesCheck = new JCheckBox("Активные зоны клика по странице (Слева/Справа — листать, Центр — Дзен)", s.isTapZonesEnabled());
+        JCheckBox tapZonesCheck = new JCheckBox("Зоны нажатия для перелистывания и режима чтения", s.isTapZonesEnabled());
         tapZonesCheck.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         tapZonesCheck.setForeground(currentTheme.getTextPrimary());
         tapZonesCheck.setOpaque(false);
         tapZonesCheck.addActionListener(e -> {
             s.setTapZonesEnabled(tapZonesCheck.isSelected());
-            storageService.saveState();
+            saveSettings();
         });
 
         JCheckBox statusZenCheck = new JCheckBox("Показывать нижнюю строку прогресса и часы в полноэкранном Дзен-режиме", s.isShowStatusBarInReader());
@@ -364,7 +361,7 @@ public class SettingsPanel extends JPanel {
         statusZenCheck.setOpaque(false);
         statusZenCheck.addActionListener(e -> {
             s.setShowStatusBarInReader(statusZenCheck.isSelected());
-            storageService.saveState();
+            saveSettings();
             onSettingsUpdated.run();
         });
 
@@ -382,7 +379,7 @@ public class SettingsPanel extends JPanel {
         sysButtonsRow.setOpaque(false);
         sysButtonsRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JButton testTtsBtn = ModernUiFactory.createFlatButton("Проверить голос озвучки (TTS)", currentTheme);
+        JButton testTtsBtn = ModernUiFactory.createFlatButton("Проверить голос", currentTheme);
         testTtsBtn.addActionListener(e -> {
             if (ttsService.isSpeaking()) {
                 ttsService.stop();
@@ -406,10 +403,9 @@ public class SettingsPanel extends JPanel {
         mainContainer.add(controlSection);
 
         mainContainer.add(Box.createVerticalStrut(16));
-        JPanel accountsSection = createSectionCard("5. Аккаунты и Синхронизация (Яндекс ID и Lib.social)");
+        JPanel accountsSection = createSectionCard("Аккаунт Яндекс ID");
 
         YandexAuthService yaService = YandexAuthService.getInstance();
-        LibAccountService libService = LibAccountService.getInstance();
 
         JPanel accountInfoRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 14, 6));
         accountInfoRow.setOpaque(false);
@@ -421,22 +417,13 @@ public class SettingsPanel extends JPanel {
         yaLbl.setFont(ModernUiFactory.uiFont(Font.BOLD, 13));
         yaLbl.setForeground(currentTheme.getTextPrimary());
 
-        LibUser lib = libService.getCurrentUser();
-        String libStatus = (lib != null && lib.isAuthenticated()) ? ("👤 " + lib.username) : "👤 Не подключён";
-        JLabel libLbl = new JLabel("Lib.social: " + libStatus);
-        libLbl.setFont(ModernUiFactory.uiFont(Font.BOLD, 13));
-        libLbl.setForeground(currentTheme.getTextPrimary());
-
-        JButton manageAuthBtn = ModernUiFactory.createPrimaryButton("Управление аккаунтами (Яндекс ID)", currentTheme);
+        JButton manageAuthBtn = ModernUiFactory.createPrimaryButton("Управление аккаунтом", currentTheme);
         manageAuthBtn.addActionListener(e -> AuthDialog.show(this, currentTheme, () -> {
             YandexUser y = yaService.getCurrentUser();
             yaLbl.setText("Яндекс ID: " + ((y != null && y.isAuthenticated()) ? ("🟡 " + y.getDisplayTitle()) : "🟡 Не подключён"));
-            LibUser l = libService.getCurrentUser();
-            libLbl.setText("Lib.social: " + ((l != null && l.isAuthenticated()) ? ("👤 " + l.username) : "👤 Не подключён"));
         }));
 
         accountInfoRow.add(yaLbl);
-        accountInfoRow.add(libLbl);
         accountInfoRow.add(manageAuthBtn);
 
         accountsSection.add(accountInfoRow);
@@ -456,7 +443,7 @@ public class SettingsPanel extends JPanel {
                     : ModernUiFactory.createFlatButton(label, currentTheme);
             btn.addActionListener(e -> {
                 storageService.getSettings().setThemeId(palette.getId());
-                storageService.saveState();
+                saveSettings();
                 onThemeChangedGlobal.accept(palette);
             });
             themeButtonsGrid.add(btn);
@@ -499,7 +486,7 @@ public class SettingsPanel extends JPanel {
         leftCol.setLayout(new BoxLayout(leftCol, BoxLayout.Y_AXIS));
         leftCol.setOpaque(false);
 
-        JLabel titleLbl = new JLabel(task.getTitle() + "  [" + task.getFormat() + "]");
+        JLabel titleLbl = ModernUiFactory.plainTextLabel(task.getTitle() + "  [" + task.getFormat() + "]");
         titleLbl.setFont(ModernUiFactory.uiFont(Font.BOLD, 14));
         titleLbl.setForeground(currentTheme.getTextPrimary());
         titleLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -539,25 +526,22 @@ public class SettingsPanel extends JPanel {
         String url = quickDownloadUrlField.getText().trim();
         String title = quickDownloadTitleField.getText().trim();
         if (url.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Введите прямую ссылку (URL) на файл книги.");
+            JOptionPane.showMessageDialog(this, "Введите прямую ссылку на файл книги.");
             return;
         }
         if (title.isEmpty()) title = "Скачанная книга";
 
         final String finalTitle = title;
-        DownloadTask task = catalogService.createTrackedTask(finalTitle, "АВТО", url);
+        DownloadTask task = catalogService.createLibraryDownload(finalTitle, "АВТО", url);
         refreshDownloadsSection();
 
         Thread t = new Thread(() -> {
             try {
-                File savedFile = catalogService.downloadBookFileWithTask(task, storageService.getBooksDir(), null);
-                Book imported = storageService.importBookFile(savedFile, false);
-                task.setImportedBook(imported);
-                catalogService.notifyDownloadListeners();
+                catalogService.downloadAndImportBook(task, storageService, null);
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
                         SettingsPanel.this,
-                        "Не удалось скачать книгу:\n" + ex.getMessage(),
+                        task.getFormattedProgressDetails(),
                         "Ошибка загрузки",
                         JOptionPane.ERROR_MESSAGE
                 ));
@@ -573,7 +557,8 @@ public class SettingsPanel extends JPanel {
             if (Files.exists(cacheDir)) {
                 try (Stream<Path> walk = Files.walk(cacheDir)) {
                     walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                        try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                        try { Files.deleteIfExists(p); }
+                        catch (java.io.IOException ex) { throw new java.io.UncheckedIOException(ex); }
                     });
                 }
             }
@@ -599,9 +584,14 @@ public class SettingsPanel extends JPanel {
         s.setWarmEyeCareFilter(false);
         s.setAutoScrollSpeed(35);
         s.setTtsRateWpm(175);
-        storageService.saveState();
+        saveSettings();
         onThemeChangedGlobal.accept(ThemePalette.byId("DAY_PAPER"));
         onSettingsUpdated.run();
+    }
+
+    private void saveSettings() {
+        UiPersistenceErrors.save(this, "Настройки применены, но сохранить их полностью не удалось.",
+                storageService::saveState);
     }
 
     private JPanel createSectionCard(String sectionTitle) {

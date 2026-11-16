@@ -144,7 +144,9 @@ public class BookParserRegistry {
             int read = 0;
             try (InputStream is = new FileInputStream(file)) {
                 read = is.read(header);
-            } catch (Exception ignored) {
+            } catch (java.io.IOException ex) {
+                java.util.logging.Logger.getLogger(BookParserRegistry.class.getName())
+                        .log(java.util.logging.Level.FINE, "Не удалось прочитать сигнатуру файла", ex);
             }
 
             if (read >= 4) {
@@ -236,7 +238,9 @@ public class BookParserRegistry {
                 }
             }
             if (hasImages) return "CBZ";
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(BookParserRegistry.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось определить тип архива по содержимому", ex);
         }
         String name = file != null ? file.getName().toLowerCase(Locale.ROOT) : "";
         if (name.endsWith(".epub")) return "EPUB";

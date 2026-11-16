@@ -182,15 +182,20 @@ public class RanobeService implements IRanobeService {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public synchronized <T extends com.luminaread.model.ranobe.RanobeItem> void loadRanobeState(
             Map<String, T> favorites,
             Map<String, T> history,
             Map<String, String> lastReadChapters,
-            Map<String, String> preferences) {
+            Map<String, String> preferences, com.luminaread.model.ranobe.RanobeItemFactory<T> factory) {
+        java.util.Objects.requireNonNull(factory, "factory");
         stateRepository.loadState(favorites, history, lastReadChapters, preferences,
                 (id, title, rusTitle, description, coverUrl, status, rating, releaseDate, genres, authors) ->
-                        (T) new RanobeItem(id, title, rusTitle, description, coverUrl, status, rating, releaseDate, genres, authors));
+                        factory.create(id, title, rusTitle, description, coverUrl, status, rating, releaseDate, genres, authors));
+    }
+
+    public synchronized void loadRanobeState(Map<String, RanobeItem> favorites, Map<String, RanobeItem> history,
+                                              Map<String, String> lastReadChapters, Map<String, String> preferences) {
+        loadRanobeState(favorites, history, lastReadChapters, preferences, RanobeItem::new);
     }
 
     // =========================================================================

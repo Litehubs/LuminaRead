@@ -8,6 +8,9 @@ import java.util.UUID;
 
 public class Highlight implements Serializable {
     private static final long serialVersionUID = 1L;
+    private static final String DEFAULT_COLOR = "#FDE047";
+    private static final java.util.regex.Pattern HEX_COLOR =
+            java.util.regex.Pattern.compile("#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})");
     private static final DateTimeFormatter FORMATTER =
             DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm").withZone(ZoneId.systemDefault());
 
@@ -30,7 +33,7 @@ public class Highlight implements Serializable {
         this.chapterTitle = chapterTitle != null ? chapterTitle : ("Глава " + (chapterIndex + 1));
         this.selectedText = selectedText != null ? selectedText.trim() : "";
         this.note = note != null ? note.trim() : "";
-        this.colorHex = (colorHex == null || colorHex.isBlank()) ? "#FDE047" : colorHex;
+        this.colorHex = normalizeColor(colorHex);
         this.createdAt = System.currentTimeMillis();
     }
 
@@ -42,8 +45,18 @@ public class Highlight implements Serializable {
     public String getSelectedText() { return selectedText; }
     public String getNote() { return note; }
     public void setNote(String note) { this.note = note != null ? note.trim() : ""; }
-    public String getColorHex() { return colorHex; }
-    public void setColorHex(String colorHex) { this.colorHex = colorHex; }
+    public String getColorHex() { return normalizeColor(colorHex); }
+    public void setColorHex(String colorHex) { this.colorHex = normalizeColor(colorHex); }
+
+    private static String normalizeColor(String color) {
+        if (color == null || !HEX_COLOR.matcher(color).matches()) return DEFAULT_COLOR;
+        if (color.length() == 7) return color;
+        StringBuilder expanded = new StringBuilder("#");
+        for (int i = 1; i < color.length(); i++) {
+            expanded.append(color.charAt(i)).append(color.charAt(i));
+        }
+        return expanded.toString();
+    }
     public long getCreatedAt() { return createdAt; }
 
     public String getFormattedDate() {

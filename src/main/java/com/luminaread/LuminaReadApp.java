@@ -10,6 +10,7 @@ import com.luminaread.ui.ModernUiFactory;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
+import javax.swing.JOptionPane;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -26,11 +27,22 @@ public class LuminaReadApp {
 
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(LuminaReadApp.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось применить системное оформление", ex);
         }
         ModernUiFactory.installGlobalUiFonts();
 
-        LibraryStorageService storageService = new LibraryStorageService();
+        LibraryStorageService storageService;
+        try {
+            storageService = new LibraryStorageService();
+        } catch (IllegalStateException | java.io.UncheckedIOException ex) {
+            ex.printStackTrace();
+            if (!java.awt.GraphicsEnvironment.isHeadless()) {
+                JOptionPane.showMessageDialog(null, ex.getMessage(), "Ошибка открытия библиотеки", JOptionPane.ERROR_MESSAGE);
+            }
+            return;
+        }
         if (storageService.getSettings().getTextAlignment() == ReaderSettings.TextAlignment.JUSTIFY) {
             storageService.getSettings().setTextAlignment(ReaderSettings.TextAlignment.LEFT);
             storageService.saveState();
@@ -44,9 +56,14 @@ public class LuminaReadApp {
         DictionaryService dictionaryService = new DictionaryService();
 
         SwingUtilities.invokeLater(() -> {
-            MainWindow window = new MainWindow(storageService, catalogService, ttsService, dictionaryService);
-            window.setVisible(true);
-            if (startupFile != null && startupFile.isFile()) window.importBookFromSystem(startupFile);
+            try {
+                MainWindow window = new MainWindow(storageService, catalogService, ttsService, dictionaryService);
+                window.setVisible(true);
+                if (startupFile != null && startupFile.isFile()) window.importBookFromSystem(startupFile);
+            } catch (IllegalStateException | java.io.UncheckedIOException ex) {
+                ex.printStackTrace();
+                JOptionPane.showMessageDialog(null, ex.getMessage(), "Ошибка открытия приложения", JOptionPane.ERROR_MESSAGE);
+            }
         });
     }
 
@@ -60,7 +77,7 @@ public class LuminaReadApp {
             if (!Files.exists(sampleFb2)) {
                 String fb2Xml = """
                         <?xml version="1.0" encoding="UTF-8"?>
-                        <FictionBook xmlns="http:
+                        <FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
                           <description>
                             <title-info>
                               <genre>classic</genre>
@@ -109,7 +126,7 @@ public class LuminaReadApp {
 
                         # Глава 1. Быстрый старт и поддерживаемые форматы
 
-                        Добро пожаловать в **LuminaRead** — кроссплатформенную настольную читалку для **macOS (MacBook)**, **Windows** и **Linux**, созданную по образцу **Moon+ Reader Pro**.
+                        Добро пожаловать в **LuminaRead** — кроссплатформенную настольную читалку для **macOS (MacBook)**, **Windows** и **Linux**.
 
                         Приложение поддерживает прямое открытие и импорт следующих форматов:
 
@@ -117,7 +134,7 @@ public class LuminaReadApp {
 
                         Вы можете просто перетащить любой файл книги мышью в окно приложения или нажать **Cmd+O** (на MacBook) / **Ctrl+O** (на Windows и Linux).
 
-                        # Глава 2. Функции чтения в стиле Moon+ Reader Pro
+                        # Глава 2. Функции чтения
 
                         В режиме чтения вам доступны все профессиональные инструменты:
 
@@ -142,7 +159,9 @@ public class LuminaReadApp {
                 Files.writeString(sampleGuide, mdText, StandardCharsets.UTF_8);
                 storageService.importBookFile(sampleGuide.toFile(), false);
             }
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(LuminaReadApp.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Не удалось добавить демонстрационные книги", ex);
         }
     }
 }

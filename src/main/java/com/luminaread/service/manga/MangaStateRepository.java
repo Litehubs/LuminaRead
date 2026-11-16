@@ -2,6 +2,10 @@ package com.luminaread.service.manga;
 
 import com.luminaread.service.MangaService.MangaItem;
 import com.luminaread.util.Json;
+import com.luminaread.util.AtomicFile;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -88,8 +92,11 @@ public class MangaStateRepository {
             }
 
             sb.append("}");
-            Files.writeString(path, sb.toString(), StandardCharsets.UTF_8);
-        } catch (Exception ignored) {}
+            byte[] content = sb.toString().getBytes(StandardCharsets.UTF_8);
+            AtomicFile.write(path, output -> output.write(content));
+        } catch (IOException ex) {
+            throw new UncheckedIOException("Не удалось сохранить данные манги: " + getStateFilePath(), ex);
+        }
     }
 
     public synchronized void loadState(Map<String, MangaItem> favorites,
@@ -101,7 +108,7 @@ public class MangaStateRepository {
             if (!Files.exists(path)) return;
             String text = Files.readString(path, StandardCharsets.UTF_8);
             Object root = Json.parse(text);
-            if (!(root instanceof Map)) return;
+            if (!(root instanceof Map)) throw new IllegalArgumentException("Ожидался объект JSON");
             Map<?, ?> map = (Map<?, ?>) root;
 
             Object favObj = map.get("favorites");
@@ -137,7 +144,10 @@ public class MangaStateRepository {
                     readerPrefs.put(str(e.getKey()), str(e.getValue()));
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (IOException | RuntimeException ex) {
+            throw new IllegalStateException("Не удалось прочитать данные манги: " + getStateFilePath()
+                    + ". Файл сохранён без изменений.", ex);
+        }
     }
 
     private static String itemToJson(MangaItem item) {

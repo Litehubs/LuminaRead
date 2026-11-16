@@ -37,6 +37,8 @@ public class BookDownloader implements IBookDownloader {
 
     private final HttpClient httpClient;
     private final Runnable updateListener;
+    private final long maxDownloadBytes;
+    private final long maxExpandedBytes;
 
     public BookDownloader() {
         this(null, null);
@@ -47,11 +49,18 @@ public class BookDownloader implements IBookDownloader {
     }
 
     public BookDownloader(HttpClient httpClient, Runnable updateListener) {
+        this(httpClient, updateListener, 512L * 1024 * 1024, 1024L * 1024 * 1024);
+    }
+
+    public BookDownloader(HttpClient httpClient, Runnable updateListener, long maxDownloadBytes, long maxExpandedBytes) {
+        if (maxDownloadBytes <= 0 || maxExpandedBytes <= 0) throw new IllegalArgumentException("Размеры должны быть положительными");
         this.httpClient = (httpClient != null) ? httpClient : HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.ALWAYS)
                 .connectTimeout(Duration.ofSeconds(15))
                 .build();
         this.updateListener = updateListener;
+        this.maxDownloadBytes = maxDownloadBytes;
+        this.maxExpandedBytes = maxExpandedBytes;
     }
 
     @Override
@@ -70,6 +79,7 @@ public class BookDownloader implements IBookDownloader {
         task.setStatus(DownloadTask.Status.DOWNLOADING);
         notifyUpdate();
 
+        Path temporaryFile = null;
         try {
             String effectiveUrl = resolveBestArchiveOrgUrl(task.getUrl(), task.getFormat());
 
@@ -81,6 +91,7 @@ public class BookDownloader implements IBookDownloader {
                     .build();
 
             HttpResponse<InputStream> response = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
+            try (InputStream in = response.body()) {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IllegalStateException("Сервер вернул код ответа HTTP " + response.statusCode()
                         + " (возможно, книга защищена авторским правом или недоступна для свободного скачивания).");
@@ -94,6 +105,7 @@ public class BookDownloader implements IBookDownloader {
             }
 
             long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+            if (contentLength > maxDownloadBytes) throw new IllegalStateException("Размер загрузки превышает допустимый предел.");
             task.setTotalBytes(contentLength);
 
             String ext = determineExtension(effectiveUrl, task.getFormat(), contentType,
@@ -110,18 +122,17 @@ public class BookDownloader implements IBookDownloader {
             if (destinationDir != null) {
                 Files.createDirectories(destinationDir);
             }
-            Path outPath = (destinationDir != null)
-                    ? destinationDir.resolve(safeBaseName + ext)
-                    : Path.of(safeBaseName + ext);
-            File outFile = outPath.toFile();
+            Path outputDir = destinationDir != null ? destinationDir : Path.of(".");
+            temporaryFile = Files.createTempFile(outputDir, ".luminaread-download-", ".tmp");
+            File outFile = temporaryFile.toFile();
             long lastNotifyMs = 0L;
 
-            try (InputStream in = response.body();
-                 BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile), 65536)) {
+            try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile), 65536)) {
                 byte[] buffer = new byte[32768];
                 long totalRead = 0;
                 int read;
                 while ((read = in.read(buffer)) != -1) {
+                    if (read > maxDownloadBytes - totalRead) throw new IllegalStateException("Размер загрузки превышает допустимый предел.");
                     out.write(buffer, 0, read);
                     totalRead += read;
                     task.setBytesDownloaded(totalRead);
@@ -154,19 +165,34 @@ public class BookDownloader implements IBookDownloader {
             outFile = decompressGzipIfNeeded(outFile);
             validateDownloadedBookFile(outFile, task.getFormat());
 
-            task.setProgressPercent(100);
-            task.setStatus(DownloadTask.Status.COMPLETED);
-            task.setSavedFile(outFile);
+            Path savedPath;
+            int suffix = 0;
+            while (true) {
+                String name = safeBaseName + (suffix == 0 ? "" : " (" + suffix + ")") + ext;
+                try {
+                    savedPath = Files.move(temporaryFile, outputDir.resolve(name));
+                    temporaryFile = null;
+                    break;
+                } catch (java.nio.file.FileAlreadyExistsException ex) {
+                    suffix++;
+                }
+            }
+            outFile = savedPath.toFile();
+
+            task.finishTransfer(outFile);
             if (progressCallback != null) {
                 progressCallback.accept(1.0);
             }
             notifyUpdate();
             return outFile;
+            }
         } catch (Exception ex) {
-            task.setStatus(DownloadTask.Status.FAILED);
             task.setErrorMessage(ex.getMessage());
+            task.setStatus(DownloadTask.Status.FAILED);
             notifyUpdate();
             throw ex;
+        } finally {
+            if (temporaryFile != null) Files.deleteIfExists(temporaryFile);
         }
     }
 
@@ -183,20 +209,25 @@ public class BookDownloader implements IBookDownloader {
         if (b0 != 0x1F || b1 != 0x8B) {
             return file;
         }
-        File tmp = new File(file.getParentFile(), file.getName() + ".gunzip.tmp");
+        Path tmp = Files.createTempFile(file.toPath().toAbsolutePath().getParent(), ".luminaread-gunzip-", ".tmp");
+        try {
         try (InputStream raw = new FileInputStream(file);
              GZIPInputStream gis = new GZIPInputStream(raw);
-             FileOutputStream fos = new FileOutputStream(tmp)) {
+             FileOutputStream fos = new FileOutputStream(tmp.toFile())) {
             byte[] buf = new byte[65536];
             int r;
+            long total = 0;
             while ((r = gis.read(buf)) > 0) {
+                if (r > maxExpandedBytes - total) throw new IllegalStateException("Размер распакованной книги превышает допустимый предел.");
                 fos.write(buf, 0, r);
+                total += r;
             }
         }
-        Path target = file.toPath();
-        Files.deleteIfExists(target);
-        Files.move(tmp.toPath(), target);
+        Files.move(tmp, file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         return file;
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
     }
 
     public void validateDownloadedBookFile(File file, String requestedFormat) throws Exception {
@@ -278,13 +309,17 @@ public class BookDownloader implements IBookDownloader {
                     .GET()
                     .build();
 
-            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (resp.statusCode() != 200 || resp.body() == null) {
-                return originalUrl;
+            HttpResponse<InputStream> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
+            String metadata;
+            try (InputStream input = resp.body()) {
+                if (resp.statusCode() != 200) return originalUrl;
+                byte[] bytes = input.readNBytes(2 * 1024 * 1024 + 1);
+                if (bytes.length > 2 * 1024 * 1024) return originalUrl;
+                metadata = new String(bytes, StandardCharsets.UTF_8);
             }
 
             List<String> fileNames = new ArrayList<>();
-            Matcher m = ARCHIVE_FILE_NAME_PATTERN.matcher(resp.body());
+            Matcher m = ARCHIVE_FILE_NAME_PATTERN.matcher(metadata);
             while (m.find()) {
                 String fn = unescapeJson(m.group(1));
                 if (!fn.isBlank()) fileNames.add(fn);
@@ -314,7 +349,11 @@ public class BookDownloader implements IBookDownloader {
                     }
                 }
             }
-        } catch (Exception ignored) {
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(BookDownloader.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось получить метаданные Internet Archive; используется исходная ссылка", ex);
         }
         return originalUrl;
     }
@@ -330,7 +369,9 @@ public class BookDownloader implements IBookDownloader {
         if (updateListener != null) {
             try {
                 updateListener.run();
-            } catch (Exception ignored) {
+            } catch (RuntimeException ex) {
+                java.util.logging.Logger.getLogger(BookDownloader.class.getName())
+                        .log(java.util.logging.Level.WARNING, "Ошибка обработчика состояния загрузки", ex);
             }
         }
     }

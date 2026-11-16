@@ -1,8 +1,5 @@
 package com.luminaread.ui;
 
-import com.luminaread.service.LibAccountService;
-import com.luminaread.service.LibAccountService.LibBookmarkItem;
-import com.luminaread.service.LibAccountService.LibUser;
 import com.luminaread.service.YandexAuthService;
 import com.luminaread.service.YandexAuthService.YandexUser;
 import com.luminaread.service.MangaService;
@@ -38,15 +35,11 @@ public class MangaPanel extends JPanel {
     private final LatestSwingRequest<ImageIcon> detailCoverRequest = new LatestSwingRequest<>();
     private final LatestSwingRequest<List<MangaChapter>> detailChaptersRequest = new LatestSwingRequest<>();
     private final LatestSwingRequest<String> detailDescriptionRequest = new LatestSwingRequest<>();
-    private final LatestSwingRequest<List<MangaItem>> catalogRequest = new LatestSwingRequest<>();
-    private final LibAccountService accountService = LibAccountService.getInstance();
+    private final LatestSwingRequest<MangaService.SearchResult> catalogRequest = new LatestSwingRequest<>();
     private final YandexAuthService yandexService = YandexAuthService.getInstance();
     private final PanelWorkers workers = new PanelWorkers(6);
     private volatile boolean disposed;
     private final Consumer<YandexUser> yandexListener = user -> SwingUtilities.invokeLater(() -> {
-        if (!disposed) updateAuthButtonState();
-    });
-    private final Consumer<LibUser> libListener = user -> SwingUtilities.invokeLater(() -> {
         if (!disposed) updateAuthButtonState();
     });
     private final AtomicInteger currentLoadToken = new AtomicInteger(0);
@@ -74,17 +67,18 @@ public class MangaPanel extends JPanel {
             "Все источники", "MangaLib (RU)", "Remanga (RU)", "MangaDex (EN/RU)"
     });
     private final JComboBox<String> categoryTabs = new JComboBox<>(new String[]{
-            "🔥 Популярное сейчас", "⭐ Избранная манга", "🕒 История чтения манги", "🔖 Мои закладки MangaLib"
+            "🔥 Популярное сейчас", "⭐ Избранная манга", "🕒 История чтения манги"
     });
     private final SmoothScrollUtil.ResponsiveListPanel gridContainer = new SmoothScrollUtil.ResponsiveListPanel(new GridLayout(0, 2, 14, 14));
     private final JLabel statusLabel = new JLabel("Готово к поиску манги и манхвы");
-    private final JButton authBtn = new JButton("🔑 Вход в Lib.social");
+    private final JButton authBtn = new JButton("Войти через Яндекс ID");
 
     private MangaItem currentManga;
     private final JLabel detailTitle = new JLabel();
     private final JLabel detailBadges = new JLabel();
     private final JTextArea detailDesc = new JTextArea();
     private final JLabel detailCover = new JLabel();
+    private final JLabel chapterStatus = new JLabel();
     private final JButton favToggleBtn = new JButton("☆ В избранное манги");
     private final DefaultListModel<MangaChapter> chapterListModel = new DefaultListModel<>();
     private final JList<MangaChapter> chapterJList = new JList<>(chapterListModel);
@@ -147,7 +141,6 @@ public class MangaPanel extends JPanel {
         add(mainContainer, BorderLayout.CENTER);
 
         yandexService.addAuthListener(yandexListener);
-        accountService.addAuthListener(libListener);
         updateAuthButtonState();
 
         if (initialSearch) performSearch("");
@@ -157,7 +150,6 @@ public class MangaPanel extends JPanel {
         if (disposed) return;
         disposed = true;
         yandexService.removeAuthListener(yandexListener);
-        accountService.removeAuthListener(libListener);
         catalogRequest.cancel();
         cancelDetailRequests();
         currentLoadToken.incrementAndGet();
@@ -167,16 +159,15 @@ public class MangaPanel extends JPanel {
 
     private void loadPreferences() {
         mangaService.loadMangaState(favoriteManga, historyManga, lastReadChapterMap, readerPrefs);
-        try {
-            if (readerPrefs.containsKey("readingMode")) readingMode = Integer.parseInt(readerPrefs.get("readingMode"));
-            if (readerPrefs.containsKey("alignmentMode")) alignmentMode = Integer.parseInt(readerPrefs.get("alignmentMode"));
-            if (readerPrefs.containsKey("zoomWidth")) zoomWidth = Math.max(500, Math.min(1800, Integer.parseInt(readerPrefs.get("zoomWidth"))));
-            if (readerPrefs.containsKey("pageGap")) pageGap = Math.max(0, Math.min(40, Integer.parseInt(readerPrefs.get("pageGap"))));
-            if (readerPrefs.containsKey("dimmerPercent")) dimmerOpacity = Math.max(0, Math.min(70, Integer.parseInt(readerPrefs.get("dimmerPercent")))) / 100.0;
-            if (readerPrefs.containsKey("bgColor")) readerBgColor = new Color(Integer.parseInt(readerPrefs.get("bgColor"), 16));
-            if (readerPrefs.containsKey("autoHideSidebar")) autoHideSidebar = Boolean.parseBoolean(readerPrefs.get("autoHideSidebar"));
-            if (readerPrefs.containsKey("autoScrollSpeed")) autoScrollSpeed = Math.max(10, Math.min(180, Integer.parseInt(readerPrefs.get("autoScrollSpeed"))));
-        } catch (Exception ignored) {}
+        readingMode = ReaderPreferenceValues.integer(readerPrefs, "readingMode", readingMode, MODE_SCROLL, MODE_PAGED);
+        alignmentMode = ReaderPreferenceValues.integer(readerPrefs, "alignmentMode", alignmentMode, ALIGN_LEFT, ALIGN_FIT_WIDTH);
+        zoomWidth = ReaderPreferenceValues.integer(readerPrefs, "zoomWidth", zoomWidth, 500, 1800);
+        pageGap = ReaderPreferenceValues.integer(readerPrefs, "pageGap", pageGap, 0, 40);
+        dimmerOpacity = ReaderPreferenceValues.integer(readerPrefs, "dimmerPercent", (int) (dimmerOpacity * 100), 0, 70) / 100.0;
+        try { if (readerPrefs.containsKey("bgColor")) readerBgColor = new Color(Integer.parseInt(readerPrefs.get("bgColor"), 16)); }
+        catch (NumberFormatException ex) { /* Keep the default color. */ }
+        autoHideSidebar = ReaderPreferenceValues.bool(readerPrefs, "autoHideSidebar", autoHideSidebar);
+        autoScrollSpeed = ReaderPreferenceValues.integer(readerPrefs, "autoScrollSpeed", autoScrollSpeed, 10, 180);
     }
 
     private void savePreferences() {
@@ -188,20 +179,23 @@ public class MangaPanel extends JPanel {
         readerPrefs.put("bgColor", String.format("%06x", readerBgColor.getRGB() & 0xFFFFFF));
         readerPrefs.put("autoHideSidebar", String.valueOf(autoHideSidebar));
         readerPrefs.put("autoScrollSpeed", String.valueOf(autoScrollSpeed));
+        try {
+            persistListState();
+        } catch (java.io.UncheckedIOException | SecurityException ex) {
+            UiPersistenceErrors.show(this, "Не удалось сохранить настройки и прогресс манги.", ex);
+        }
+    }
+
+    private void persistListState() {
         mangaService.saveMangaState(favoriteManga, historyManga, lastReadChapterMap, readerPrefs);
     }
 
     private void updateAuthButtonState() {
         YandexUser ya = yandexService.getCurrentUser();
-        LibUser lib = accountService.getCurrentUser();
         if (ya != null && ya.isAuthenticated()) {
             authBtn.setText("🟡 " + ya.getDisplayTitle());
             authBtn.setBackground(new Color(255, 214, 0));
             authBtn.setForeground(new Color(20, 20, 20));
-        } else if (lib != null && lib.isAuthenticated()) {
-            authBtn.setText("👤 " + lib.username);
-            authBtn.setBackground(new Color(46, 125, 50));
-            authBtn.setForeground(Color.WHITE);
         } else {
             authBtn.setText("🟡 Войти через Яндекс ID");
             authBtn.setBackground(new Color(55, 60, 75));
@@ -302,80 +296,13 @@ public class MangaPanel extends JPanel {
             renderMangaItems(new ArrayList<>(favoriteManga.values()), "Избранная манга (" + favoriteManga.size() + ")");
         } else if (idx == 2) {
             renderMangaItems(new ArrayList<>(historyManga.values()), "История чтения манги (" + historyManga.size() + ")");
-        } else if (idx == 3) {
-            loadLibBookmarks();
         }
-    }
-
-    private void loadLibBookmarks() {
-        if (disposed) return;
-        YandexUser ya = yandexService.getCurrentUser();
-        LibUser lib = accountService.getCurrentUser();
-
-        if (!accountService.isLoggedIn() && ya != null && ya.isAuthenticated()) {
-            String candidate = !ya.linkedLibUsername.isEmpty() ? ya.linkedLibUsername : ya.login;
-            try {
-                accountService.loginWithProfile(candidate);
-            } catch (Exception ignored) {}
-        }
-
-        if (!accountService.isLoggedIn()) {
-            gridContainer.removeAll();
-            JPanel promptCard = new JPanel();
-            promptCard.setLayout(new BoxLayout(promptCard, BoxLayout.Y_AXIS));
-            promptCard.setOpaque(false);
-            promptCard.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-            JLabel msg = new JLabel(
-                    (ya != null && ya.isAuthenticated())
-                            ? "Вы вошли через Яндекс ID (" + ya.getDisplayTitle() + "). Укажите никнейм Lib.social для закладок:"
-                            : "Войдите через Яндекс ID или Lib.social для синхронизации закладок MangaLib.",
-                    SwingConstants.CENTER
-            );
-            msg.setForeground(Color.LIGHT_GRAY);
-            msg.setFont(new Font("SansSerif", Font.BOLD, 14));
-            msg.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-            JButton loginBtn = new JButton("🟡 Войти через Яндекс ID / Lib.social");
-            loginBtn.setBackground(new Color(255, 214, 0));
-            loginBtn.setForeground(new Color(20, 20, 20));
-            loginBtn.setFont(new Font("SansSerif", Font.BOLD, 13));
-            loginBtn.setFocusPainted(false);
-            loginBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
-            loginBtn.addActionListener(e -> showAuthDialog());
-
-            promptCard.add(Box.createVerticalStrut(60));
-            promptCard.add(msg);
-            promptCard.add(Box.createVerticalStrut(14));
-            promptCard.add(loginBtn);
-
-            gridContainer.add(promptCard);
-            statusLabel.setText("Требуется авторизация для просмотра закладок");
-            gridContainer.revalidate();
-            gridContainer.repaint();
-            return;
-        }
-
-        statusLabel.setText("⏳ Загрузка закладок пользователя из MangaLib...");
-        gridContainer.removeAll();
-        gridContainer.revalidate();
-        gridContainer.repaint();
-
-        catalogRequest.start(() -> {
-            List<MangaItem> items = new ArrayList<>();
-            for (LibBookmarkItem bookmark : accountService.fetchUserBookmarks(1, 0)) {
-                String mangaId = bookmark.slugUrl.startsWith("mgl:") ? bookmark.slugUrl : "mgl:" + bookmark.slugUrl;
-                String desc = "Закладка MangaLib: " + bookmark.getStatusName()
-                        + (bookmark.lastReadChapter.isEmpty() ? "" : " (последняя глава: " + bookmark.lastReadChapter + ")");
-                items.add(new MangaItem(mangaId, bookmark.title, bookmark.rusTitle, desc, bookmark.coverUrl,
-                        "MangaLib (RU)", bookmark.getStatusName(), "★ Закладка"));
-            }
-            return items;
-        }, items -> renderMangaItems(items, "Закладок MangaLib загружено: " + items.size()),
-                error -> reportCatalogError("Ошибка загрузки закладок", error));
     }
 
     private JPanel buildDetailsView() {
+        detailTitle.putClientProperty("html.disable", Boolean.TRUE);
+        detailBadges.putClientProperty("html.disable", Boolean.TRUE);
+        chapterStatus.setForeground(new Color(225, 170, 130));
         JPanel panel = new JPanel(new BorderLayout(16, 16));
         panel.setBackground(new Color(20, 22, 29));
         panel.setBorder(new EmptyBorder(18, 22, 18, 22));
@@ -504,7 +431,11 @@ public class MangaPanel extends JPanel {
         JPanel body = new JPanel(new BorderLayout(0, 12));
         body.setOpaque(false);
         body.add(infoCard, BorderLayout.NORTH);
-        body.add(chScroll, BorderLayout.CENTER);
+        JPanel chapterArea = new JPanel(new BorderLayout(0, 6));
+        chapterArea.setOpaque(false);
+        chapterArea.add(chapterStatus, BorderLayout.NORTH);
+        chapterArea.add(chScroll, BorderLayout.CENTER);
+        body.add(chapterArea, BorderLayout.CENTER);
         body.add(startReadBtn, BorderLayout.SOUTH);
 
         panel.add(topNav, BorderLayout.NORTH);
@@ -781,7 +712,7 @@ public class MangaPanel extends JPanel {
         autoScrollTimer.start();
     }
 
-    private void stopAutoScroll() {
+    void stopAutoScroll() {
         if (autoScrollTimer != null) {
             autoScrollTimer.stop();
             autoScrollTimer = null;
@@ -1107,15 +1038,16 @@ public class MangaPanel extends JPanel {
         String rawSource = (String) sourceSelector.getSelectedItem();
         final String source = rawSource != null && !"Все источники".equals(rawSource) ? rawSource : "Все источники";
 
-        catalogRequest.start(() -> mangaService.searchManga(query, source),
-                items -> renderMangaItems(items, "Найдено манги/манхвы: " + items.size()),
-                error -> reportCatalogError("Не удалось выполнить поиск манги", error));
-    }
-
-    private void reportCatalogError(String message, Throwable error) {
-        java.util.logging.Logger.getLogger(MangaPanel.class.getName())
-                .log(java.util.logging.Level.WARNING, message, error);
-        statusLabel.setText(message + ". Повторите попытку.");
+        catalogRequest.start(() -> mangaService.searchMangaDetailed(query, source), result -> {
+                    String message = "Найдено манги/манхвы: " + result.items().size();
+                    if (!result.failedSources().isEmpty()) {
+                        message += " · Не удалось загрузить: " + String.join(", ", result.failedSources());
+                    }
+                    renderMangaItems(result.items(), message);
+                }, error -> {
+                    java.util.logging.Logger.getLogger(MangaPanel.class.getName()).log(java.util.logging.Level.WARNING, "Ошибка поиска манги", error);
+                    statusLabel.setText("Не удалось выполнить поиск манги. Повторите попытку.");
+                });
     }
 
     private void renderMangaItems(List<MangaItem> items, String statusMsg) {
@@ -1212,6 +1144,7 @@ public class MangaPanel extends JPanel {
 
         detailCover.setIcon(null);
         detailCover.setText("Загрузка...");
+        chapterStatus.setText("Загрузка глав...");
         allChapters = Collections.emptyList();
         currentChapterList = new ArrayList<>();
         chapterListModel.clear();
@@ -1237,7 +1170,11 @@ public class MangaPanel extends JPanel {
             buildLanguageSelector();
             languageCombo.setEnabled(languageCombo.getItemCount() > 0);
             applyLanguageFilter();
-        }, error -> reportDetailError("Не удалось загрузить главы", error));
+            chapterStatus.setText(chapters.isEmpty() ? "Главы не найдены" : " ");
+        }, error -> {
+            reportDetailError("Не удалось загрузить главы", error);
+            chapterStatus.setText("Не удалось загрузить главы. Повторите попытку.");
+        });
 
         if (item.source != null && (item.source.startsWith("MangaLib") || item.source.startsWith("Remanga"))) {
             detailDescriptionRequest.start(() -> mangaService.fetchDescription(item), full -> {
@@ -1274,11 +1211,6 @@ public class MangaPanel extends JPanel {
         final int token = currentLoadToken.incrementAndGet();
 
         MangaChapter ch = currentChapterList.get(idx);
-        if (currentManga != null) {
-            lastReadChapterMap.put(currentManga.id, "Гл. " + ch.number);
-            savePreferences();
-        }
-
         if (autoHideSidebar && onToggleSidebar != null) {
             onToggleSidebar.accept(false);
             isZenActive = true;
@@ -1312,6 +1244,10 @@ public class MangaPanel extends JPanel {
                 if (token != currentLoadToken.get()) return;
                 try {
                     currentPages = get();
+                    if (currentManga != null && currentPages != null && !currentPages.isEmpty()) {
+                        lastReadChapterMap.put(currentManga.id, "Гл. " + ch.number);
+                        savePreferences();
+                    }
                     if (targetInitialPage == -1 && currentPages != null && !currentPages.isEmpty()) {
                         currentPageIndex = Math.max(0, currentPages.size() - 1);
                     } else {
@@ -1319,6 +1255,7 @@ public class MangaPanel extends JPanel {
                     }
                     renderReaderPages();
                 } catch (Exception ex) {
+                    reportDetailError("Не удалось загрузить страницы главы", ex);
                     currentPages = Collections.emptyList();
                     currentPageIndex = 0;
                     renderReaderPages();

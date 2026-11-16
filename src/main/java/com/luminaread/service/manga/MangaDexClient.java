@@ -37,9 +37,9 @@ public class MangaDexClient {
             }
             String json = httpGet(apiUrl);
             Object root = Json.parse(json);
-            if (!(root instanceof Map)) return list;
+            if (!(root instanceof Map)) throw new IOException("Некорректный ответ MangaDex");
             Object data = ((Map<?, ?>) root).get("data");
-            if (!(data instanceof List)) return list;
+            if (!(data instanceof List)) throw new IOException("В ответе MangaDex отсутствует список");
             for (Object o : (List<?>) data) {
                 if (!(o instanceof Map)) continue;
                 Map<?, ?> m = (Map<?, ?>) o;
@@ -56,7 +56,9 @@ public class MangaDexClient {
                 String status = statusLabel(str(a.get("status")));
                 list.add(new MangaItem(id, title, rusTitle, desc, coverUrl, MD_SOURCE, status, "★ MD"));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось выполнить поиск MangaDex", ex);
+        }
         return list;
     }
 
@@ -73,6 +75,8 @@ public class MangaDexClient {
                     + "/feed?limit=500&translatedLanguage[]=ru&translatedLanguage[]=en&order[chapter]=asc&includes[]=scanlation_group";
             String json = httpGet(url);
             Object root = Json.parse(json);
+            if (!(root instanceof Map) || !(((Map<?, ?>) root).get("data") instanceof List))
+                throw new IOException("Некорректный список глав MangaDex");
             if (root instanceof Map) {
                 Object data = ((Map<?, ?>) root).get("data");
                 if (data instanceof List) {
@@ -101,7 +105,9 @@ public class MangaDexClient {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось загрузить главы MangaDex", ex);
+        }
         return chapters;
     }
 
@@ -136,7 +142,9 @@ public class MangaDexClient {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось загрузить страницы MangaDex", ex);
+        }
         return pages;
     }
 

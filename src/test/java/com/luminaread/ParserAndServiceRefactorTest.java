@@ -190,10 +190,13 @@ public class ParserAndServiceRefactorTest {
 
         // Verify WindowsTtsEngine
         WindowsTtsEngine winEngine = new WindowsTtsEngine();
-        ProcessBuilder winPb = winEngine.buildProcess("Hello 'Windows'", 175);
+        String bookText = "Hello 'Windows' ’); Write-Output injected; $(1+1)";
+        ProcessBuilder winPb = winEngine.buildProcess(bookText, 175);
         require("powershell.exe".equalsIgnoreCase(winPb.command().get(0)), "Win command must invoke powershell.exe");
         String script = winPb.command().get(winPb.command().size() - 1);
-        require(script.contains("''Windows''"), "Win engine must escape single quotes by doubling");
+        require(script.contains("$s.Speak($env:LUMINAREAD_TTS_TEXT)"), "Speech must read isolated input data");
+        require(!script.contains("injected"), "Book text must never be interpolated into PowerShell code");
+        require(bookText.equals(winPb.environment().get("LUMINAREAD_TTS_TEXT")), "Speech input must preserve quotes");
 
         // Verify LinuxTtsEngine
         LinuxTtsEngine linuxEngine = new LinuxTtsEngine();

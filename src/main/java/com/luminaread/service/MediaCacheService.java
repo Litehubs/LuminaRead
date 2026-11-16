@@ -1,6 +1,7 @@
 package com.luminaread.service;
 
 import javax.imageio.ImageIO;
+import com.luminaread.util.ImageSizeGuard;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.RenderingHints;
@@ -21,6 +22,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 public class MediaCacheService implements IMediaCacheService {
 
+    private static final int DEFAULT_MAX_IMAGE_BYTES = 32 * 1024 * 1024;
     private static final MediaCacheService INSTANCE = new MediaCacheService();
 
     public static final String BROWSER_UA =
@@ -39,16 +41,31 @@ public class MediaCacheService implements IMediaCacheService {
             "https://img2.hentaicdn.org"
     ));
 
-    private final Map<String, BufferedImage> memoryCache = Collections.synchronizedMap(
-            new LinkedHashMap<String, BufferedImage>(70, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, BufferedImage> eldest) {
-                    return size() > 70;
-                }
-            }
-    );
+    private static final long MAX_CACHE_PIXELS = 32_000_000L;
+    private final Map<String, BufferedImage> memoryCache = new LinkedHashMap<>(70, 0.75f, true);
+    private long cachedPixels;
 
-    public MediaCacheService() {
+    private synchronized BufferedImage cachedImage(String url) { return memoryCache.get(url); }
+
+    private synchronized void cacheImage(String url, BufferedImage image) {
+        BufferedImage previous = memoryCache.put(url, image);
+        if (previous != null) cachedPixels -= (long) previous.getWidth() * previous.getHeight();
+        cachedPixels += (long) image.getWidth() * image.getHeight();
+        var entries = memoryCache.entrySet().iterator();
+        while ((cachedPixels > MAX_CACHE_PIXELS || memoryCache.size() > 70) && entries.hasNext()) {
+            BufferedImage removed = entries.next().getValue();
+            cachedPixels -= (long) removed.getWidth() * removed.getHeight();
+            entries.remove();
+        }
+    }
+
+    private final int maxImageBytes;
+
+    public MediaCacheService() { this(DEFAULT_MAX_IMAGE_BYTES); }
+
+    MediaCacheService(int maxImageBytes) {
+        if (maxImageBytes <= 0) throw new IllegalArgumentException("Image size limit must be positive");
+        this.maxImageBytes = maxImageBytes;
     }
 
     public static MediaCacheService getInstance() {
@@ -62,13 +79,12 @@ public class MediaCacheService implements IMediaCacheService {
         }
         urlStr = urlStr.trim();
 
-        if (memoryCache.containsKey(urlStr)) {
-            return memoryCache.get(urlStr);
-        }
+        BufferedImage cached = cachedImage(urlStr);
+        if (cached != null) return cached;
 
         BufferedImage img = downloadAndDecode(urlStr, null);
         if (img != null) {
-            memoryCache.put(urlStr, img);
+            cacheImage(urlStr, img);
             return img;
         }
 
@@ -83,7 +99,7 @@ public class MediaCacheService implements IMediaCacheService {
                 if (altUrl != null && !altUrl.equals(urlStr)) {
                     BufferedImage altImg = downloadAndDecode(altUrl, null);
                     if (altImg != null) {
-                        memoryCache.put(urlStr, altImg);
+                        cacheImage(urlStr, altImg);
                         return altImg;
                     }
                 }
@@ -94,8 +110,9 @@ public class MediaCacheService implements IMediaCacheService {
     }
 
     @Override
-    public void clearMemoryCache() {
+    public synchronized void clearMemoryCache() {
         memoryCache.clear();
+        cachedPixels = 0;
     }
 
     @Override
@@ -109,36 +126,38 @@ public class MediaCacheService implements IMediaCacheService {
         File cacheDir = java.nio.file.Path.of(System.getProperty("user.home"), ".luminaread", "cache", folderName).toFile();
         try {
             Files.createDirectories(cacheDir.toPath());
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            logFallback("Не удалось создать папку кэша изображений", ex);
+        }
 
         String hash = hashUrl(urlStr);
         File cachedPng = new File(cacheDir, "img_" + hash + ".png");
 
         if (cachedPng.exists() && cachedPng.length() > 0) {
             try {
+                if (ImageSizeGuard.inspect(cachedPng) != ImageSizeGuard.Result.ACCEPTABLE) {
+                    return new CachedImageInfo("", 0, 0);
+                }
                 BufferedImage bi = ImageIO.read(cachedPng);
                 if (bi != null) {
                     return new CachedImageInfo(cachedPng.toURI().toString(), bi.getWidth(), bi.getHeight());
                 }
-            } catch (Throwable ignored) {
+            } catch (Exception | LinkageError ex) {
+                logFallback("Не удалось прочитать изображение из кэша", ex);
+                return new CachedImageInfo("", 0, 0);
             }
             if (cachedPng.length() > 500) {
                 return new CachedImageInfo(cachedPng.toURI().toString(), 0, 0);
             }
         }
-        if (false) {
-            try {
-                BufferedImage bi = ImageIO.read(cachedPng);
-                if (bi != null) {
-                    return new CachedImageInfo(cachedPng.toURI().toString(), bi.getWidth(), bi.getHeight());
-                }
-            } catch (Throwable ignored) {
-            }
-            return new CachedImageInfo(cachedPng.toURI().toString(), 0, 0);
-        }
-
         byte[] bytes = downloadImageBytes(urlStr, referer);
         if (bytes != null && bytes.length > 0) {
+            try {
+                if (ImageSizeGuard.inspect(bytes) != ImageSizeGuard.Result.ACCEPTABLE) return new CachedImageInfo("", 0, 0);
+            } catch (java.io.IOException ex) {
+                logFallback("Не удалось проверить размер изображения", ex);
+                return new CachedImageInfo("", 0, 0);
+            }
             BufferedImage bi = decodeBytes(bytes);
 
             if (bi != null) {
@@ -160,19 +179,21 @@ public class MediaCacheService implements IMediaCacheService {
                 try {
                     ImageIO.write(bi, "png", cachedPng);
                     return new CachedImageInfo(cachedPng.toURI().toString(), bi.getWidth(), bi.getHeight());
-                } catch (Throwable e) {
-                    System.err.println("Error saving cached image to " + cachedPng.getAbsolutePath() + ": " + e.getMessage());
+                } catch (Exception | LinkageError ex) {
+                    logFallback("Не удалось сохранить изображение в кэш", ex);
                 }
             } else {
                 try {
                     Files.write(cachedPng.toPath(), bytes);
                     return new CachedImageInfo(cachedPng.toURI().toString(), 0, 0);
-                } catch (Throwable ignored) {
+                } catch (Exception ex) {
+                    logFallback("Не удалось сохранить исходное изображение в кэш", ex);
                 }
             }
         }
 
-        return new CachedImageInfo(urlStr, 0, 0);
+        // Do not hand the remote URL to an HTML renderer: that would bypass download limits.
+        return new CachedImageInfo("", 0, 0);
     }
 
     @Override
@@ -186,7 +207,8 @@ public class MediaCacheService implements IMediaCacheService {
                 return null;
             }
             return decodeBytes(bytes);
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            logFallback("Не удалось получить изображение", ex);
         }
         return null;
     }
@@ -197,20 +219,30 @@ public class MediaCacheService implements IMediaCacheService {
         }
 
         try {
+            if (ImageSizeGuard.inspect(bytes) != ImageSizeGuard.Result.ACCEPTABLE) return null;
+        } catch (java.io.IOException ex) {
+            logFallback("Не удалось проверить размер изображения", ex);
+            return null;
+        }
+
+        try {
             BufferedImage bi = ImageIO.read(new ByteArrayInputStream(bytes));
             if (bi != null && bi.getWidth() > 0 && bi.getHeight() > 0) {
                 return bi;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception | LinkageError ex) {
+            logFallback("Основной декодер изображения не сработал", ex);
         }
 
         try {
             ImageIO.scanForPlugins();
+            if (ImageSizeGuard.inspect(bytes) != ImageSizeGuard.Result.ACCEPTABLE) return null;
             BufferedImage bi = ImageIO.read(new ByteArrayInputStream(bytes));
             if (bi != null && bi.getWidth() > 0 && bi.getHeight() > 0) {
                 return bi;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception | LinkageError ex) {
+            logFallback("Дополнительный декодер изображения не сработал", ex);
         }
 
         BufferedImage sipsImg = tryDecodeWithSips(bytes);
@@ -226,7 +258,8 @@ public class MediaCacheService implements IMediaCacheService {
                     return bi;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception | LinkageError ex) {
+            logFallback("Системный декодер изображения не сработал", ex);
         }
 
         return null;
@@ -249,7 +282,8 @@ public class MediaCacheService implements IMediaCacheService {
                     if (refUri.getScheme() != null && refUri.getHost() != null) {
                         conn.setRequestProperty("Origin", refUri.getScheme() + "://" + refUri.getHost());
                     }
-                } catch (Exception ignored) {
+                } catch (IllegalArgumentException ex) {
+                    logFallback("Некорректный адрес источника изображения", ex);
                 }
             } else {
                 if (isMangaLibUrl(host) || isMangaLibUrl(urlStr)) {
@@ -271,17 +305,24 @@ public class MediaCacheService implements IMediaCacheService {
 
             int code = conn.getResponseCode();
             if (code >= 200 && code < 300) {
+                if (conn.getContentLengthLong() > maxImageBytes) {
+                    throw new java.io.IOException("Image response exceeds size limit");
+                }
                 try (InputStream is = conn.getInputStream();
                      ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                     byte[] buf = new byte[8192];
                     int r;
+                    long total = 0;
                     while ((r = is.read(buf)) != -1) {
+                        total += r;
+                        if (total > maxImageBytes) throw new java.io.IOException("Image response exceeds size limit");
                         baos.write(buf, 0, r);
                     }
                     return baos.toByteArray();
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception | LinkageError ex) {
+            logFallback("Не удалось загрузить изображение", ex);
         } finally {
             if (conn != null) {
                 conn.disconnect();
@@ -297,7 +338,9 @@ public class MediaCacheService implements IMediaCacheService {
         }
         File inTmp = null;
         File outTmp = null;
+        Process process = null;
         try {
+            if (ImageSizeGuard.inspect(bytes) != ImageSizeGuard.Result.ACCEPTABLE) return null;
             inTmp = File.createTempFile("luminaread_sips_in_", ".webp");
             outTmp = File.createTempFile("luminaread_sips_out_", ".png");
             Files.write(inTmp.toPath(), bytes);
@@ -305,13 +348,19 @@ public class MediaCacheService implements IMediaCacheService {
             ProcessBuilder pb = new ProcessBuilder(
                     "sips", "-s", "format", "png", inTmp.getAbsolutePath(), "--out", outTmp.getAbsolutePath()
             );
-            Process p = pb.start();
-            boolean ok = p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
+            process = pb.start();
+            boolean ok = process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
             if (ok && outTmp.exists() && outTmp.length() > 0) {
+                if (ImageSizeGuard.inspect(outTmp) != ImageSizeGuard.Result.ACCEPTABLE) return null;
                 return ImageIO.read(outTmp);
             }
-        } catch (Throwable ignored) {
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            logFallback("Декодирование изображения прервано", ex);
+        } catch (Exception | LinkageError ex) {
+            logFallback("Не удалось преобразовать изображение системной утилитой", ex);
         } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
             if (inTmp != null) inTmp.delete();
             if (outTmp != null) outTmp.delete();
         }
@@ -329,12 +378,14 @@ public class MediaCacheService implements IMediaCacheService {
             tracker.addImage(img, 0);
             try {
                 tracker.waitForID(0, 3000);
-            } catch (InterruptedException ignored) {
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return null;
             }
             w = img.getWidth(null);
             h = img.getHeight(null);
         }
-        if (w <= 0 || h <= 0) {
+        if (w <= 0 || h <= 0 || w > 12_000 || h > 12_000 || (long) w * h > 25_000_000L) {
             return null;
         }
 
@@ -345,6 +396,11 @@ public class MediaCacheService implements IMediaCacheService {
         return bi;
     }
 
+    private static void logFallback(String message, Throwable error) {
+        java.util.logging.Logger.getLogger(MediaCacheService.class.getName())
+                .log(java.util.logging.Level.FINE, message, error);
+    }
+
     public static String replaceHost(String urlStr, String newBase) {
         if (urlStr == null || newBase == null) return null;
         try {
@@ -353,6 +409,7 @@ public class MediaCacheService implements IMediaCacheService {
             String cleanBase = newBase.replaceAll("/+$", "");
             return cleanBase + (pathAndQuery.startsWith("/") ? "" : "/") + pathAndQuery;
         } catch (Exception e) {
+            logFallback("Не удалось построить альтернативный адрес изображения", e);
             return null;
         }
     }

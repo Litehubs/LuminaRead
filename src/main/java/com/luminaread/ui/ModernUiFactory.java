@@ -2,10 +2,10 @@ package com.luminaread.ui;
 
 import com.luminaread.model.Book;
 
-import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JTextField;
 import javax.swing.UIManager;
 import java.awt.BasicStroke;
@@ -20,7 +20,6 @@ import java.awt.GraphicsEnvironment;
 import java.awt.Image;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Locale;
@@ -29,6 +28,13 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class ModernUiFactory {
+    static JLabel plainTextLabel(String text) {
+        JLabel label = new JLabel();
+        label.putClientProperty("html.disable", Boolean.TRUE);
+        label.setText(text);
+        return label;
+    }
+
     private static final Map<String, ImageIcon> COVER_CACHE = new ConcurrentHashMap<>();
     private static final String UI_FONT_FAMILY = detectBestUiFontFamily();
     private static final String SERIF_FONT_FAMILY = detectBestSerifFontFamily();
@@ -48,7 +54,8 @@ public final class ModernUiFactory {
                     }
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception | LinkageError ex) {
+            logFallback("Не удалось определить системный шрифт", ex);
         }
         return "SansSerif";
     }
@@ -65,7 +72,8 @@ public final class ModernUiFactory {
                     }
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception | LinkageError ex) {
+            logFallback("Не удалось определить шрифт с засечками", ex);
         }
         return "Serif";
     }
@@ -81,7 +89,8 @@ public final class ModernUiFactory {
                     return font;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception | LinkageError ex) {
+            logFallback("Не удалось выбрать шрифт", ex);
         }
         return fallbackLogicalName;
     }
@@ -180,13 +189,14 @@ public final class ModernUiFactory {
         boolean renderedEmbedded = false;
         if (book.getCoverImage() != null && book.getCoverImage().length > 0) {
             try {
-                BufferedImage rawCover = ImageIO.read(new ByteArrayInputStream(book.getCoverImage()));
+                BufferedImage rawCover = BookCoverDecoder.decode(book.getCoverImage());
                 if (rawCover != null) {
                     Image scaled = rawCover.getScaledInstance(width, height, Image.SCALE_SMOOTH);
                     g2.drawImage(scaled, 0, 0, null);
                     renderedEmbedded = true;
                 }
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                logFallback("Не удалось прочитать обложку книги", ex);
             }
         }
 
@@ -202,6 +212,11 @@ public final class ModernUiFactory {
         ImageIcon icon = new ImageIcon(img);
         COVER_CACHE.put(cacheKey, icon);
         return icon;
+    }
+
+    private static void logFallback(String message, Throwable error) {
+        java.util.logging.Logger.getLogger(ModernUiFactory.class.getName())
+                .log(java.util.logging.Level.FINE, message, error);
     }
 
     private static void renderProceduralCover(Graphics2D g2, Book book, int width, int height) {

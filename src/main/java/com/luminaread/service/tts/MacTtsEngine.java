@@ -21,7 +21,12 @@ public class MacTtsEngine implements TtsEngine {
         try {
             Process p = new ProcessBuilder("which", "say").redirectErrorStream(true).start();
             return p.waitFor() == 0;
-        } catch (Exception e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (java.io.IOException e) {
+            java.util.logging.Logger.getLogger(MacTtsEngine.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось проверить наличие команды озвучивания", e);
             return false;
         }
     }

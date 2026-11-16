@@ -6,124 +6,149 @@ import java.util.List;
 import java.util.Map;
 
 public final class Json {
-
+    private static final int MAX_NESTING_DEPTH = 128;
     private final String s;
     private int i;
 
-    private Json(String s) {
-        this.s = s;
-    }
+    private Json(String s) { this.s = s; }
 
     public static Object parse(String text) {
         if (text == null) return null;
-        Json p = new Json(text);
-        Object v = p.readValue();
-        return v;
+        Json parser = new Json(text);
+        Object value = parser.readValue(0);
+        parser.skipWs();
+        if (parser.i != text.length()) throw parser.invalid();
+        return value;
+    }
+
+    private IllegalArgumentException invalid() {
+        return new IllegalArgumentException("Invalid JSON at position " + i);
     }
 
     private void skipWs() {
-        while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
+        while (i < s.length() && " \t\r\n".indexOf(s.charAt(i)) >= 0) i++;
     }
 
-    private Object readValue() {
+    private boolean take(char c) {
         skipWs();
-        if (i >= s.length()) return null;
-        char c = s.charAt(i);
-        switch (c) {
-            case '{': return readObject();
-            case '[': return readArray();
-            case '"': return readString();
-            case 't': i += 4; return Boolean.TRUE;
-            case 'f': i += 5; return Boolean.FALSE;
-            case 'n': i += 4; return null;
-            default: return readNumber();
-        }
+        if (i < s.length() && s.charAt(i) == c) { i++; return true; }
+        return false;
     }
 
-    private Map<String, Object> readObject() {
-        Map<String, Object> map = new LinkedHashMap<>();
-        i++;
+    private void require(char c) { if (!take(c)) throw invalid(); }
+
+    private Object readValue(int depth) {
         skipWs();
-        if (i < s.length() && s.charAt(i) == '}') { i++; return map; }
-        while (i < s.length()) {
+        if (i >= s.length()) throw invalid();
+        char start = s.charAt(i);
+        if (depth >= MAX_NESTING_DEPTH && (start == '[' || start == '{')) throw invalid();
+        return switch (start) {
+            case '{' -> readObject(depth);
+            case '[' -> readArray(depth);
+            case '"' -> readString();
+            case 't' -> readLiteral("true", Boolean.TRUE);
+            case 'f' -> readLiteral("false", Boolean.FALSE);
+            case 'n' -> readLiteral("null", null);
+            default -> readNumber();
+        };
+    }
+
+    private Object readLiteral(String literal, Object value) {
+        if (!s.startsWith(literal, i)) throw invalid();
+        i += literal.length();
+        return value;
+    }
+
+    private Map<String, Object> readObject(int depth) {
+        require('{');
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (take('}')) return result;
+        do {
             skipWs();
-            if (i >= s.length() || s.charAt(i) != '"') break;
+            if (i >= s.length() || s.charAt(i) != '"') throw invalid();
             String key = readString();
-            skipWs();
-            if (i < s.length() && s.charAt(i) == ':') i++;
-            map.put(key, readValue());
-            skipWs();
-            if (i >= s.length()) break;
-            char c = s.charAt(i++);
-            if (c == '}') break;
-
-        }
-        return map;
+            require(':');
+            result.put(key, readValue(depth + 1));
+            if (take('}')) return result;
+            require(',');
+        } while (true);
     }
 
-    private List<Object> readArray() {
-        List<Object> list = new ArrayList<>();
-        i++;
-        skipWs();
-        if (i < s.length() && s.charAt(i) == ']') { i++; return list; }
-        while (i < s.length()) {
-            list.add(readValue());
-            skipWs();
-            if (i >= s.length()) break;
-            char c = s.charAt(i++);
-            if (c == ']') break;
-
-        }
-        return list;
+    private List<Object> readArray(int depth) {
+        require('[');
+        List<Object> result = new ArrayList<>();
+        if (take(']')) return result;
+        do {
+            result.add(readValue(depth + 1));
+            if (take(']')) return result;
+            require(',');
+        } while (true);
     }
 
     private String readString() {
-        i++;
-        StringBuilder sb = new StringBuilder();
+        require('"');
+        StringBuilder result = new StringBuilder();
         while (i < s.length()) {
             char c = s.charAt(i++);
-            if (c == '"') break;
-            if (c == '\\') {
-                if (i >= s.length()) break;
-                char e = s.charAt(i++);
-                switch (e) {
-                    case '"': sb.append('"'); break;
-                    case '\\': sb.append('\\'); break;
-                    case '/': sb.append('/'); break;
-                    case 'b': sb.append('\b'); break;
-                    case 'f': sb.append('\f'); break;
-                    case 'n': sb.append('\n'); break;
-                    case 'r': sb.append('\r'); break;
-                    case 't': sb.append('\t'); break;
-                    case 'u':
-                        if (i + 4 <= s.length()) {
-                            try {
-                                sb.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
-                                i += 4;
-                            } catch (NumberFormatException ex) {
-                                sb.append('u');
-                            }
-                        } else {
-                            sb.append('u');
-                        }
-                        break;
-                    default: sb.append(e);
+            if (c == '"') return result.toString();
+            if (c < 0x20) throw invalid();
+            if (c != '\\') { result.append(c); continue; }
+            if (i >= s.length()) throw invalid();
+            char escape = s.charAt(i++);
+            switch (escape) {
+                case '"', '\\', '/' -> result.append(escape);
+                case 'b' -> result.append('\b');
+                case 'f' -> result.append('\f');
+                case 'n' -> result.append('\n');
+                case 'r' -> result.append('\r');
+                case 't' -> result.append('\t');
+                case 'u' -> {
+                    if (i + 4 > s.length()) throw invalid();
+                    int code = 0;
+                    for (int j = 0; j < 4; j++) {
+                        char hex = s.charAt(i++);
+                        int digit = hex < 128 ? Character.digit(hex, 16) : -1;
+                        if (digit < 0) throw invalid();
+                        code = code * 16 + digit;
+                    }
+                    result.append((char) code);
                 }
-            } else {
-                sb.append(c);
+                default -> throw invalid();
             }
         }
-        return sb.toString();
+        throw invalid();
     }
 
     private Object readNumber() {
         int start = i;
-        while (i < s.length() && "-+0123456789.eE".indexOf(s.charAt(i)) >= 0) i++;
-        String num = s.substring(start, i);
-        if (num.isEmpty()) return null;
-        if (num.indexOf('.') >= 0 || num.indexOf('e') >= 0 || num.indexOf('E') >= 0) {
-            try { return Double.parseDouble(num); } catch (NumberFormatException e) { return null; }
+        if (i < s.length() && s.charAt(i) == '-') i++;
+        if (i >= s.length()) throw invalid();
+        if (s.charAt(i) == '0') i++;
+        else {
+            if (s.charAt(i) < '1' || s.charAt(i) > '9') throw invalid();
+            digits();
         }
-        try { return Long.parseLong(num); } catch (NumberFormatException e) { return null; }
+        boolean decimal = false;
+        if (i < s.length() && s.charAt(i) == '.') {
+            decimal = true; i++; int first = i; digits(); if (i == first) throw invalid();
+        }
+        if (i < s.length() && (s.charAt(i) == 'e' || s.charAt(i) == 'E')) {
+            decimal = true; i++;
+            if (i < s.length() && (s.charAt(i) == '+' || s.charAt(i) == '-')) i++;
+            int first = i; digits(); if (i == first) throw invalid();
+        }
+        String number = s.substring(start, i);
+        try {
+            if (decimal) {
+                double value = Double.parseDouble(number);
+                if (!Double.isFinite(value)) throw invalid();
+                return value;
+            }
+            return Long.parseLong(number);
+        } catch (NumberFormatException ex) { throw invalid(); }
+    }
+
+    private void digits() {
+        while (i < s.length() && s.charAt(i) >= '0' && s.charAt(i) <= '9') i++;
     }
 }

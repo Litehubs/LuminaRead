@@ -22,12 +22,13 @@ public class WindowsTtsEngine implements TtsEngine {
     @Override
     public ProcessBuilder buildProcess(String textToSpeak, int rateWpm) {
         int winRate = Math.max(-5, Math.min(5, (rateWpm - 175) / 25));
-        String escapedText = escapeForPowerShell(textToSpeak);
         String psCmd = "Add-Type -AssemblyName System.Speech; "
                 + "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
                 + "$s.Rate = " + winRate + "; "
-                + "$s.Speak('" + escapedText + "');";
-        return new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", psCmd);
+                + "$s.Speak($env:LUMINAREAD_TTS_TEXT);";
+        ProcessBuilder process = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", psCmd);
+        process.environment().put("LUMINAREAD_TTS_TEXT", textToSpeak == null ? "" : textToSpeak.replace('\0', ' '));
+        return process;
     }
 
     @Override

@@ -80,7 +80,7 @@ public class MainWindow extends JFrame {
         this.storageService = storageService;
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());
 
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         setSize(1280, 840);
         setMinimumSize(new Dimension(980, 660));
         setLocationRelativeTo(null);
@@ -176,10 +176,17 @@ public class MainWindow extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                storageService.saveState();
+                try {
+                    storageService.saveState();
+                } catch (java.io.UncheckedIOException | SecurityException ex) {
+                    UiPersistenceErrors.show(MainWindow.this,
+                            "Не удалось сохранить библиотеку. Окно оставлено открытым. Проверьте доступ к файлам и повторите закрытие.",
+                            ex);
+                    return;
+                }
                 disposeReadingResources();
+                setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
             }
-
             @Override
             public void windowClosed(WindowEvent e) {
                 disposeReadingResources();
@@ -190,7 +197,7 @@ public class MainWindow extends JFrame {
     }
 
     private void disposeReadingResources() {
-        readerPanel.stopActiveFeatures();
+        readerPanel.disposeResources();
         mangaPanel.disposeResources();
         ranobePanel.disposeResources();
     }
@@ -253,6 +260,8 @@ public class MainWindow extends JFrame {
     }
 
     public void switchView(String viewKey) {
+        if (VIEW_MANGA.equals(currentView) && !VIEW_MANGA.equals(viewKey)) mangaPanel.stopAutoScroll();
+        if (VIEW_RANOBE.equals(currentView) && !VIEW_RANOBE.equals(viewKey)) ranobePanel.stopAutoScroll();
         this.currentView = viewKey;
         if (!VIEW_READER.equals(viewKey)) {
             readerPanel.stopActiveFeatures();
@@ -320,7 +329,7 @@ public class MainWindow extends JFrame {
             JMenuItem themeItem = new JMenuItem("Тема: " + palette.getDisplayName());
             themeItem.addActionListener(e -> {
                 storageService.getSettings().setThemeId(palette.getId());
-                storageService.saveState();
+                UiPersistenceErrors.save(this, "Не удалось сохранить выбранную тему.", storageService::saveState);
                 applyGlobalTheme(palette);
             });
             viewMenu.add(themeItem);
@@ -364,8 +373,14 @@ public class MainWindow extends JFrame {
                         if (!bookFiles.isEmpty()) libraryPanel.importFiles(bookFiles.toArray(new File[0]));
                         dtde.dropComplete(true);
                     } else dtde.dropComplete(false);
-                } catch (Exception ignored) {
-                    try { dtde.dropComplete(false); } catch (Exception ignoredAgain) {}
+                } catch (Exception ex) {
+                    java.util.logging.Logger.getLogger(MainWindow.class.getName())
+                            .log(java.util.logging.Level.WARNING, "Не удалось обработать перетаскивание файлов", ex);
+                    try { dtde.dropComplete(false); }
+                    catch (RuntimeException completionError) {
+                        java.util.logging.Logger.getLogger(MainWindow.class.getName())
+                                .log(java.util.logging.Level.FINE, "Не удалось завершить перетаскивание", completionError);
+                    }
                 }
             }
         }, true);
@@ -388,7 +403,10 @@ public class MainWindow extends JFrame {
                 setIconImage(icon);
                 setSafeTaskbarIcon(icon);
             }
-        } catch (Throwable ignored) {}
+        } catch (Exception | LinkageError ex) {
+            java.util.logging.Logger.getLogger(MainWindow.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось установить значок приложения", ex);
+        }
     }
 
     public static boolean setSafeTaskbarIcon(Image icon) {
@@ -403,7 +421,9 @@ public class MainWindow extends JFrame {
                     return true;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception | LinkageError ex) {
+            java.util.logging.Logger.getLogger(MainWindow.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось установить значок в панели задач", ex);
         }
         return false;
     }

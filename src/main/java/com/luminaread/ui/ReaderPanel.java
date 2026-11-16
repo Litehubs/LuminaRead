@@ -21,7 +21,6 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
-import javax.swing.JDialog;
 import javax.swing.JEditorPane;
 import javax.swing.JLabel;
 import javax.swing.JList;
@@ -36,7 +35,6 @@ import javax.swing.JTextField;
 import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
-import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import javax.swing.text.html.HTMLEditorKit;
 import javax.swing.text.html.StyleSheet;
@@ -45,7 +43,6 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.Frame;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
@@ -59,14 +56,13 @@ import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.regex.Pattern;
 
 public class ReaderPanel extends JPanel {
     private static final DateTimeFormatter CLOCK_FMT = DateTimeFormatter.ofPattern("HH:mm");
 
     private final LibraryStorageService storageService;
     private final ITtsService ttsService;
-    private final IDictionaryService dictionaryService;
+    private final ReaderDictionaryLookup dictionaryLookup;
     private final Runnable onBackToLibrary;
     private final ConsumerThemeCallback onThemeChangedGlobal;
 
@@ -76,7 +72,7 @@ public class ReaderPanel extends JPanel {
 
     private Book currentBook;
     private BookContent currentContent;
-    private long bookOpenSequence = 0;
+    private final ReaderBookLoader bookLoader;
     private List<String> currentChapterPages = Collections.emptyList();
     private int currentChapterIndex = 0;
     private int currentPageIndex = 0;
@@ -131,9 +127,10 @@ public class ReaderPanel extends JPanel {
                        ConsumerThemeCallback onThemeChangedGlobal) {
         this.storageService = storageService;
         this.ttsService = ttsService;
-        this.dictionaryService = dictionaryService;
+        this.dictionaryLookup = new ReaderDictionaryLookup(dictionaryService);
         this.onBackToLibrary = onBackToLibrary;
         this.onThemeChangedGlobal = onThemeChangedGlobal;
+        this.bookLoader = new ReaderBookLoader(storageService::loadBookContent);
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());
 
         setLayout(new BorderLayout(0, 0));
@@ -222,7 +219,7 @@ public class ReaderPanel extends JPanel {
         eyeCareCheckbox.setOpaque(false);
         eyeCareCheckbox.addActionListener(e -> {
             storageService.getSettings().setWarmEyeCareFilter(eyeCareCheckbox.isSelected());
-            storageService.saveState();
+            UiPersistenceErrors.save(this, "Не удалось сохранить настройку чтения.", storageService::saveState);
             if (readerCanvasWrapper != null) {
                 readerCanvasWrapper.repaint();
             }
@@ -268,7 +265,7 @@ public class ReaderPanel extends JPanel {
             }
         };
         bookEditorPane.setEditable(false);
-        bookEditorPane.setContentType("text/html");
+        bookEditorPane.setEditorKit(new ReaderHtmlKit());
         bookEditorPane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
         if (bookEditorPane.getCaret() instanceof DefaultCaret) {
             ((DefaultCaret) bookEditorPane.getCaret()).setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
@@ -436,7 +433,6 @@ public class ReaderPanel extends JPanel {
     public void openBook(Book book) {
         if (book == null) return;
         stopActiveFeatures();
-        long requestId = ++bookOpenSequence;
         currentBook = book;
         currentContent = null;
         currentChapterPages = Collections.emptyList();
@@ -446,34 +442,22 @@ public class ReaderPanel extends JPanel {
         statusLeftLabel.setText("Загружаю: " + book.getTitle());
         statusRightLabel.setText("Подождите");
 
-        new SwingWorker<BookContent, Void>() {
-            @Override
-            protected BookContent doInBackground() throws Exception {
-                return storageService.loadBookContent(book);
-            }
-
-            @Override
-            protected void done() {
-                if (requestId != bookOpenSequence) return;
-                try {
-                    currentContent = get();
-                    book.setLastOpenedTimestamp(System.currentTimeMillis());
-                    for (Chapter chapter : currentContent.getChapters()) tocListModel.addElement(chapter);
-                    int startChapter = Math.min(Math.max(0, book.getCurrentChapterIndex()),
-                            Math.max(0, currentContent.getChapters().size() - 1));
-                    int startPage = Math.max(0, book.getCurrentPageInChapter());
-                    goToChapterAndPage(startChapter, startPage);
-                } catch (Exception ex) {
-                    currentContent = null;
-                    String message = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
-                    statusLeftLabel.setText("Не удалось открыть книгу");
-                    statusRightLabel.setText("");
-                    JOptionPane.showMessageDialog(ReaderPanel.this,
-                            "Не удалось загрузить содержимое книги:\n" + message,
-                            "Ошибка чтения", JOptionPane.ERROR_MESSAGE);
-                }
-            }
-        }.execute();
+        bookLoader.open(book, content -> {
+            currentContent = content;
+            book.setLastOpenedTimestamp(System.currentTimeMillis());
+            for (Chapter chapter : currentContent.getChapters()) tocListModel.addElement(chapter);
+            int startChapter = Math.min(Math.max(0, book.getCurrentChapterIndex()),
+                    Math.max(0, currentContent.getChapters().size() - 1));
+            int startPage = Math.max(0, book.getCurrentPageInChapter());
+            goToChapterAndPage(startChapter, startPage);
+        }, ex -> {
+            currentContent = null;
+            statusLeftLabel.setText("Не удалось открыть книгу");
+            statusRightLabel.setText("");
+            JOptionPane.showMessageDialog(ReaderPanel.this,
+                    "Не удалось загрузить содержимое книги:\n" + ex.getMessage(),
+                    "Ошибка чтения", JOptionPane.ERROR_MESSAGE);
+        });
     }
 
     public void goToChapterAndPage(int chapterIdx, int pageIdx) {
@@ -505,7 +489,7 @@ public class ReaderPanel extends JPanel {
         if (currentContent == null || currentContent.getChapters().isEmpty()) return;
         ReaderSettings settings = storageService.getSettings();
 
-        HTMLEditorKit kit = new HTMLEditorKit();
+        HTMLEditorKit kit = new ReaderHtmlKit();
         StyleSheet styleSheet = kit.getStyleSheet();
 
         String bgHex = ThemePalette.toHex(currentTheme.getCardBackground());
@@ -559,26 +543,8 @@ public class ReaderPanel extends JPanel {
     }
 
     private String injectSavedHighlightsAndSearch(String html) {
-        String decorated = html;
-        if (currentBook != null) {
-            List<Highlight> highlights = storageService.getHighlights(currentBook.getId());
-            for (Highlight hl : highlights) {
-                if (hl.getChapterIndex() == currentChapterIndex && hl.getSelectedText().length() >= 4) {
-                    String snippet = HtmlSanitizer.escapeHtml(hl.getSelectedText());
-                    if (decorated.contains(snippet)) {
-                        String span = "<span style='background-color:" + hl.getColorHex() + "; color:#111111;'>"
-                                + snippet + "</span>";
-                        decorated = decorated.replace(snippet, span);
-                    }
-                }
-            }
-        }
-        if (activeSearchHighlightTerm != null && !activeSearchHighlightTerm.isBlank()) {
-            String escapedTerm = Pattern.quote(HtmlSanitizer.escapeHtml(activeSearchHighlightTerm));
-            decorated = decorated.replaceAll("(?i)(" + escapedTerm + ")",
-                    "<span style='background-color:#FACC15; color:#000000;'><b>$1</b></span>");
-        }
-        return decorated;
+        List<Highlight> highlights = currentBook != null ? storageService.getHighlights(currentBook.getId()) : List.of();
+        return ReaderMarkupDecorator.decorate(html, highlights, currentChapterIndex, activeSearchHighlightTerm);
     }
 
     public void navigateForward() {
@@ -647,8 +613,14 @@ public class ReaderPanel extends JPanel {
         currentBook.setCurrentChapterIndex(currentChapterIndex);
         currentBook.setCurrentPageInChapter(currentPageIndex);
         currentBook.setProgressPercent(progress);
-        storageService.saveState();
         updateStatusBar();
+        try {
+            storageService.saveState();
+        } catch (java.io.UncheckedIOException | SecurityException ex) {
+            java.util.logging.Logger.getLogger(ReaderPanel.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Не удалось сохранить прогресс чтения", ex);
+            statusRightLabel.setText("Прогресс не сохранён");
+        }
     }
 
     private void updateStatusBar() {
@@ -704,7 +676,7 @@ public class ReaderPanel extends JPanel {
         s.setFontSize(s.getFontSize() + delta);
         int scaledChars = Math.max(900, Math.min(4500, (int) (2400.0 * 19.0 / s.getFontSize())));
         s.setCharsPerPage(scaledChars);
-        storageService.saveState();
+        UiPersistenceErrors.save(this, "Не удалось сохранить размер шрифта.", storageService::saveState);
         goToChapterAndPage(currentChapterIndex, currentPageIndex);
     }
 
@@ -811,8 +783,9 @@ public class ReaderPanel extends JPanel {
                 userLabel,
                 snippet
         );
-        storageService.addBookmark(bm);
-        JOptionPane.showMessageDialog(this, "Закладка сохранена!", "Закладка", JOptionPane.INFORMATION_MESSAGE);
+        if (UiPersistenceErrors.save(this, "Не удалось сохранить закладку.", () -> storageService.addBookmark(bm))) {
+            JOptionPane.showMessageDialog(this, "Закладка сохранена!", "Закладка", JOptionPane.INFORMATION_MESSAGE);
+        }
     }
 
     private void createHighlightFromSelection() {
@@ -856,7 +829,7 @@ public class ReaderPanel extends JPanel {
                     noteField.getText(),
                     hex
             );
-            storageService.addHighlight(hl);
+            UiPersistenceErrors.save(this, "Не удалось сохранить цитату.", () -> storageService.addHighlight(hl));
             renderCurrentViewport();
         }
     }
@@ -868,18 +841,17 @@ public class ReaderPanel extends JPanel {
         }
         if (selected == null || selected.isBlank()) return;
 
-        final String query = selected.trim();
-        Thread t = new Thread(() -> {
-            String translation = dictionaryService.lookupAndTranslate(query);
-            SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
+        dictionaryLookup.lookup(selected.trim(), translation -> JOptionPane.showMessageDialog(
                     ReaderPanel.this,
                     translation,
                     "Словарь и Переводчик LuminaRead",
                     JOptionPane.INFORMATION_MESSAGE
-            ));
-        }, "LuminaRead-Dict");
-        t.setDaemon(true);
-        t.start();
+            ), error -> {
+                java.util.logging.Logger.getLogger(ReaderPanel.class.getName())
+                        .log(java.util.logging.Level.WARNING, "Не удалось получить перевод", error);
+                JOptionPane.showMessageDialog(ReaderPanel.this, "Не удалось получить перевод.",
+                        "Ошибка словаря", JOptionPane.ERROR_MESSAGE);
+            });
     }
 
     private void searchInBookNext() {
@@ -916,125 +888,28 @@ public class ReaderPanel extends JPanel {
     }
 
     public void openTypographyAndThemeDialog() {
-        ReaderSettings s = storageService.getSettings();
-        JDialog dialog = new JDialog(
-                (Frame) SwingUtilities.getWindowAncestor(this),
-                "Настройки чтения, типографики и тем (Moon+ Pro)",
-                true
-        );
-        dialog.setLayout(new BorderLayout(12, 12));
-
-        JPanel form = new JPanel(new GridLayout(0, 2, 12, 10));
-        form.setBorder(BorderFactory.createEmptyBorder(18, 22, 18, 22));
-
-        JComboBox<ThemePalette> themeCombo = new JComboBox<>(
-                ThemePalette.PRESETS.values().toArray(new ThemePalette[0]));
-        themeCombo.setSelectedItem(ThemePalette.byId(s.getThemeId()));
-
-        JComboBox<String> fontCombo = new JComboBox<>(new String[]{
-                "Georgia", "Palatino", "Times New Roman", "Arial", "Helvetica Neue", "Verdana", "Monospaced"
-        });
-        fontCombo.setSelectedItem(s.getFontFamily());
-
-        JSlider fontSizeSlider = new JSlider(12, 36, s.getFontSize());
-        fontSizeSlider.setMajorTickSpacing(4);
-        fontSizeSlider.setPaintTicks(true);
-        fontSizeSlider.setPaintLabels(true);
-
-        JComboBox<String> lineHeightCombo = new JComboBox<>(new String[]{
-                "1.2 (Плотное)", "1.4 (Стандартное)", "1.6 (Комфортное)", "1.8 (Воздушное)", "2.0 (Двойной интервал)"
-        });
-        int lhIndex = (int) Math.round((s.getLineHeight() - 1.2) / 0.2);
-        lineHeightCombo.setSelectedIndex(Math.max(0, Math.min(4, lhIndex)));
-
-        JComboBox<String> alignCombo = new JComboBox<>(new String[]{
-                "По левому краю (Ровные пробелы)", "По ширине страницы (Justify)"
-        });
-        alignCombo.setSelectedIndex(s.getTextAlignment() == ReaderSettings.TextAlignment.LEFT ? 0 : 1);
-
-        JSlider marginSlider = new JSlider(20, 180, s.getHorizontalMarginPx());
-        marginSlider.setMajorTickSpacing(40);
-        marginSlider.setPaintTicks(true);
-        marginSlider.setPaintLabels(true);
-
-        JComboBox<String> modeCombo = new JComboBox<>(new String[]{
-                "Постраничный режим (Листание)", "Плавный вертикальный свиток (Скролл)"
-        });
-        modeCombo.setSelectedIndex(s.getReadingMode() == ReaderSettings.ReadingMode.PAGED ? 0 : 1);
-
-        JCheckBox twoColCheck = new JCheckBox("Двухколоночный книжный разворот (2 страницы рядом)", s.isTwoColumnSpread());
-        JSlider autoScrollSpeedSlider = new JSlider(10, 150, s.getAutoScrollSpeed());
-        JSlider ttsRateSlider = new JSlider(110, 300, s.getTtsRateWpm());
-
-        form.add(new JLabel("Цветовая тема оформления:"));
-        form.add(themeCombo);
-        form.add(new JLabel("Гарнитура шрифта:"));
-        form.add(fontCombo);
-        form.add(new JLabel("Размер шрифта (пт):"));
-        form.add(fontSizeSlider);
-        form.add(new JLabel("Межстрочный интервал:"));
-        form.add(lineHeightCombo);
-        form.add(new JLabel("Выравнивание текста:"));
-        form.add(alignCombo);
-        form.add(new JLabel("Боковые поля страницы (px):"));
-        form.add(marginSlider);
-        form.add(new JLabel("Режим перелистывания:"));
-        form.add(modeCombo);
-        form.add(new JLabel("Книжный разворот:"));
-        form.add(twoColCheck);
-        form.add(new JLabel("Скорость автопрокрутки:"));
-        form.add(autoScrollSpeedSlider);
-        form.add(new JLabel("Скорость чтения вслух (TTS слов/мин):"));
-        form.add(ttsRateSlider);
-
-        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 10));
-        JButton applyBtn = ModernUiFactory.createPrimaryButton("Применить настройки", currentTheme);
-        applyBtn.addActionListener(e -> {
-            ThemePalette chosenTheme = (ThemePalette) themeCombo.getSelectedItem();
-            if (chosenTheme != null) {
-                s.setThemeId(chosenTheme.getId());
-                this.currentTheme = chosenTheme;
-                onThemeChangedGlobal.onThemeChanged(chosenTheme);
-            }
-            s.setFontFamily((String) fontCombo.getSelectedItem());
-            s.setFontSize(fontSizeSlider.getValue());
-            double[] lhValues = {1.2, 1.4, 1.6, 1.8, 2.0};
-            s.setLineHeight(lhValues[Math.max(0, lineHeightCombo.getSelectedIndex())]);
-            s.setTextAlignment(alignCombo.getSelectedIndex() == 0
-                    ? ReaderSettings.TextAlignment.LEFT
-                    : ReaderSettings.TextAlignment.JUSTIFY);
-            s.setHorizontalMarginPx(marginSlider.getValue());
-            s.setReadingMode(modeCombo.getSelectedIndex() == 0
-                    ? ReaderSettings.ReadingMode.PAGED
-                    : ReaderSettings.ReadingMode.SCROLL);
-            s.setTwoColumnSpread(twoColCheck.isSelected());
-            s.setAutoScrollSpeed(autoScrollSpeedSlider.getValue());
-            s.setTtsRateWpm(ttsRateSlider.getValue());
-
-            int scaledChars = Math.max(900, Math.min(4800, (int) (2400.0 * 19.0 / s.getFontSize())));
-            if (s.isTwoColumnSpread()) scaledChars = (int) (scaledChars * 0.85);
-            s.setCharsPerPage(scaledChars);
-
-            storageService.saveState();
-            goToChapterAndPage(currentChapterIndex, currentPageIndex);
-            dialog.dispose();
-        });
-
-        btnRow.add(applyBtn);
-        dialog.add(form, BorderLayout.CENTER);
-        dialog.add(btnRow, BorderLayout.SOUTH);
-        dialog.pack();
-        dialog.setLocationRelativeTo(this);
-        dialog.setVisible(true);
+        ReaderTypographyDialog.show(this, storageService.getSettings(), currentTheme, theme -> {
+            currentTheme = theme;
+            onThemeChangedGlobal.onThemeChanged(theme);
+        }, storageService::saveState, () -> goToChapterAndPage(currentChapterIndex, currentPageIndex));
     }
 
     public void stopActiveFeatures() {
+        bookLoader.cancel();
+        dictionaryLookup.cancel();
         if (autoScrollActive) {
             toggleAutoScroll();
         }
         if (ttsService.isSpeaking()) {
             ttsService.stop();
         }
+    }
+
+    public void disposeResources() {
+        stopActiveFeatures();
+        bookLoader.close();
+        dictionaryLookup.close();
+        readingTimeTrackerTimer.stop();
     }
 
     public void applyTheme(ThemePalette theme) {

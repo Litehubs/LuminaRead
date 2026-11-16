@@ -41,12 +41,24 @@ public class OpdsFeedParser {
             byte[] bytes = inputStream.readAllBytes();
             return parse(bytes, baseUrl, sourceLabel);
         } catch (Exception e) {
+            java.util.logging.Logger.getLogger(OpdsFeedParser.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось прочитать OPDS-поток", e);
             return Collections.emptyList();
         }
     }
 
     public List<OnlineBookItem> parse(String xmlContent, String baseUrl, String sourceLabel) {
+        return parseInternal(xmlContent, baseUrl, sourceLabel, false);
+    }
+
+    public List<OnlineBookItem> parseStrict(byte[] xmlBytes, String baseUrl, String sourceLabel) {
+        if (xmlBytes == null || xmlBytes.length == 0) throw new IllegalArgumentException("Пустой ответ OPDS");
+        return parseInternal(CharsetDetector.decodeBytes(xmlBytes), baseUrl, sourceLabel, true);
+    }
+
+    private List<OnlineBookItem> parseInternal(String xmlContent, String baseUrl, String sourceLabel, boolean strict) {
         if (xmlContent == null || xmlContent.isBlank()) {
+            if (strict) throw new IllegalArgumentException("Пустой ответ OPDS");
             return Collections.emptyList();
         }
 
@@ -57,6 +69,7 @@ public class OpdsFeedParser {
             if (firstLt > 0) {
                 xml = xml.substring(firstLt);
             } else if (firstLt < 0) {
+                if (strict) throw new IllegalArgumentException("Ответ OPDS не является XML");
                 return Collections.emptyList();
             }
 
@@ -65,12 +78,9 @@ public class OpdsFeedParser {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setNamespaceAware(false);
             factory.setValidating(false);
-            try {
-                factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            } catch (Exception ignored) {
-            }
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
 
             DocumentBuilder builder = factory.newDocumentBuilder();
             builder.setErrorHandler(new org.xml.sax.ErrorHandler() {
@@ -84,12 +94,18 @@ public class OpdsFeedParser {
                 }
             });
             Document doc = builder.parse(new InputSource(new StringReader(xml)));
+            String rootName = doc.getDocumentElement().getTagName();
+            if (strict && !(rootName.equals("feed") || rootName.endsWith(":feed"))) {
+                throw new IllegalArgumentException("Ответ не является OPDS-каталогом");
+            }
 
             URI baseUri = null;
             if (baseUrl != null && !baseUrl.isBlank()) {
                 try {
                     baseUri = URI.create(baseUrl);
-                } catch (Exception ignored) {
+                } catch (IllegalArgumentException ex) {
+                    java.util.logging.Logger.getLogger(OpdsFeedParser.class.getName())
+                            .log(java.util.logging.Level.FINE, "Некорректный базовый адрес OPDS", ex);
                 }
             }
 
@@ -157,8 +173,10 @@ public class OpdsFeedParser {
                     results.add(bookItem);
                 }
             }
-        } catch (Exception ignored) {
-            // Malformed XML or unparseable input silently returns already parsed entries or empty list
+        } catch (Exception ex) {
+            if (strict) throw new IllegalArgumentException("Не удалось разобрать OPDS-каталог", ex);
+            java.util.logging.Logger.getLogger(OpdsFeedParser.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось разобрать OPDS-каталог", ex);
         }
         return results;
     }

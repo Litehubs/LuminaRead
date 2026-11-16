@@ -236,11 +236,15 @@ public class TxtMarkdownParser implements BookParser {
                 try {
                     Charset rtfCharset = Charset.forName("windows-" + codePageMatcher.group(1));
                     return reinterpretAnsiCharacters(plain, rtfCharset);
-                } catch (Exception ignored) {
+                } catch (Exception ex) {
+                    java.util.logging.Logger.getLogger(TxtMarkdownParser.class.getName())
+                            .log(java.util.logging.Level.FINE, "Не удалось применить кодировку RTF", ex);
                 }
             }
             return plain;
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(TxtMarkdownParser.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось разобрать RTF; используется упрощённое чтение", ex);
             return stripBasicRtf(fallbackText);
         }
     }

@@ -17,6 +17,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.io.StringReader;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +37,38 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
 public class EpubParser implements BookParser {
+    private static final long MAX_ARCHIVE_BYTES = 128L * 1024 * 1024;
+    private static final long MAX_ENTRY_BYTES = 64L * 1024 * 1024;
+    private static final long MAX_EXPANDED_BYTES = 128L * 1024 * 1024;
+    private static final int MAX_ENTRIES = 10000;
+
+    private static final class ArchiveLimitException extends IOException {
+        ArchiveLimitException(String message) { super(message); }
+    }
+
+    private static final class ArchiveBudget {
+        private long total;
+        private int entries;
+
+        void entry() throws ArchiveLimitException {
+            if (++entries > MAX_ENTRIES) throw new ArchiveLimitException("Слишком много файлов в EPUB");
+        }
+
+        byte[] read(InputStream input) throws IOException {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            long size = 0;
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (count > MAX_ENTRY_BYTES - size || count > MAX_EXPANDED_BYTES - total)
+                    throw new ArchiveLimitException("Размер распакованного EPUB превышает допустимый предел");
+                output.write(buffer, 0, count);
+                size += count;
+                total += count;
+            }
+            return output.toByteArray();
+        }
+    }
     private static final Pattern IMG_SRC_PATTERN =
             Pattern.compile("(<img[^>]+src\\s*=\\s*[\"'])([^\"']+)([\"'][^>]*>)", Pattern.CASE_INSENSITIVE);
     private static final Pattern SVG_IMAGE_PATTERN =
@@ -103,7 +136,9 @@ public class EpubParser implements BookParser {
                             Files.write(target, e.getValue());
                             imageUriByEntryPath.put(path, target.toUri().toString());
                         }
-                    } catch (Exception ignored) {
+                    } catch (Exception ex) {
+                        java.util.logging.Logger.getLogger(EpubParser.class.getName())
+                                .log(java.util.logging.Level.WARNING, "Не удалось сохранить изображение EPUB", ex);
                     }
                 }
             }
@@ -132,9 +167,11 @@ public class EpubParser implements BookParser {
         }
 
         int chapterIndex = 0;
+        // Different spelling/case can resolve to the same archive entry.
+        java.util.Set<byte[]> processedEntries = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         for (String chapterPath : spineFiles) {
             byte[] chBytes = findEntryBytesFlexible(zipEntries, chapterPath);
-            if (chBytes == null) continue;
+            if (chBytes == null || !processedEntries.add(chBytes)) continue;
 
             String rawXhtml = CharsetDetector.decodeBytes(chBytes);
             String chapterDir = getParentDir(chapterPath);
@@ -198,8 +235,9 @@ public class EpubParser implements BookParser {
         return content;
     }
 
-    private Map<String, byte[]> readZipEntriesRobust(File file) {
-        Map<String, byte[]> zipEntries = new LinkedHashMap<>();
+    private Map<String, byte[]> readZipEntriesRobust(File file) throws IOException {
+        if (Files.size(file.toPath()) > MAX_ARCHIVE_BYTES)
+            throw new ArchiveLimitException("Размер файла EPUB превышает допустимый предел");
 
         Charset[] charsetsToTry = {
                 StandardCharsets.UTF_8,
@@ -208,31 +246,44 @@ public class EpubParser implements BookParser {
         };
 
         for (Charset cs : charsetsToTry) {
+            Map<String, byte[]> zipEntries = new LinkedHashMap<>();
+            ArchiveBudget budget = new ArchiveBudget();
             try (ZipFile zf = new ZipFile(file, cs)) {
                 Enumeration<? extends ZipEntry> entries = zf.entries();
                 while (entries.hasMoreElements()) {
                     ZipEntry entry = entries.nextElement();
+                    budget.entry();
                     if (!entry.isDirectory()) {
                         try (InputStream is = zf.getInputStream(entry)) {
-                            zipEntries.put(normalizePath(entry.getName()), is.readAllBytes());
+                            zipEntries.put(normalizePath(entry.getName()), budget.read(is));
                         }
                     }
                 }
                 if (!zipEntries.isEmpty()) {
                     return zipEntries;
                 }
-            } catch (Exception ignored) {
+            } catch (ArchiveLimitException ex) {
+                throw ex;
+            } catch (Exception ex) {
+                java.util.logging.Logger.getLogger(EpubParser.class.getName())
+                        .log(java.util.logging.Level.FINE, "Не удалось прочитать EPUB в выбранной кодировке имён", ex);
             }
         }
 
+        Map<String, byte[]> zipEntries = new LinkedHashMap<>();
+        ArchiveBudget budget = new ArchiveBudget();
         try (ZipInputStream zis = new ZipInputStream(new FileInputStream(file))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
-                if (!entry.isDirectory()) {
-                    zipEntries.put(normalizePath(entry.getName()), readEntryBytes(zis));
-                }
+                budget.entry();
+                byte[] bytes = budget.read(zis);
+                if (!entry.isDirectory()) zipEntries.put(normalizePath(entry.getName()), bytes);
             }
-        } catch (Exception ignored) {
+        } catch (ArchiveLimitException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(EpubParser.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось прочитать EPUB как поток ZIP", ex);
         }
         return zipEntries;
     }
@@ -268,7 +319,9 @@ public class EpubParser implements BookParser {
                         return normalizePath(fullPath);
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                java.util.logging.Logger.getLogger(EpubParser.class.getName())
+                        .log(java.util.logging.Level.FINE, "Не удалось прочитать указатель EPUB; ищем файл книги", ex);
             }
         }
         for (String key : zipEntries.keySet()) {
@@ -336,7 +389,9 @@ public class EpubParser implements BookParser {
                     parseNcxToc(cleanXmlProlog(CharsetDetector.decodeBytes(ncxBytes)), getParentDir(ncxPath), tocTitlesByHref);
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(EpubParser.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось прочитать метаданные EPUB", ex);
         }
     }
 
@@ -359,7 +414,9 @@ public class EpubParser implements BookParser {
                     }
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(EpubParser.class.getName())
+                    .log(java.util.logging.Level.FINE, "Не удалось прочитать оглавление EPUB", ex);
         }
     }
 
@@ -439,24 +496,11 @@ public class EpubParser implements BookParser {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(false);
         factory.setValidating(false);
-        try {
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        } catch (Exception ignored) {
-        }
+        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
         DocumentBuilder builder = factory.newDocumentBuilder();
         return builder.parse(new InputSource(new StringReader(xml)));
-    }
-
-    private byte[] readEntryBytes(ZipInputStream zis) throws Exception {
-        ByteArrayOutputStream bos = new ByteArrayOutputStream(16384);
-        byte[] buf = new byte[8192];
-        int r;
-        while ((r = zis.read(buf)) != -1) {
-            bos.write(buf, 0, r);
-        }
-        return bos.toByteArray();
     }
 
     private String normalizePath(String path) {
@@ -503,6 +547,8 @@ public class EpubParser implements BookParser {
             Files.createDirectories(dir);
             return dir;
         } catch (Exception e) {
+            java.util.logging.Logger.getLogger(EpubParser.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Не удалось создать кэш изображений EPUB", e);
             return null;
         }
     }

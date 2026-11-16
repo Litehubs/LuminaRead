@@ -62,7 +62,8 @@ public final class CharsetDetector {
         try {
             String name = matcher.group(1).trim();
             return Charset.isSupported(name) ? Charset.forName(name) : null;
-        } catch (Exception ignored) {
+        } catch (IllegalArgumentException ignored) {
+            // Invalid or unsupported declarations are followed by charset detection.
             return null;
         }
     }
@@ -80,6 +81,7 @@ public final class CharsetDetector {
                     .decode(ByteBuffer.wrap(data));
             return true;
         } catch (CharacterCodingException ignored) {
+            // Invalid UTF-8 is expected when the text uses a different charset.
             return false;
         }
     }

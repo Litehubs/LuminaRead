@@ -2,6 +2,10 @@ package com.luminaread.service.ranobe;
 
 import com.luminaread.model.ranobe.RanobeItem;
 import com.luminaread.util.Json;
+import com.luminaread.util.AtomicFile;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -9,6 +13,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Repository responsible for thread-safe persistence and retrieval of Ranobe state
@@ -102,8 +107,11 @@ public class RanobeStateRepository {
             }
 
             sb.append("}");
-            Files.writeString(stateFile, sb.toString(), StandardCharsets.UTF_8);
-        } catch (Exception ignored) {}
+            byte[] content = sb.toString().getBytes(StandardCharsets.UTF_8);
+            AtomicFile.write(stateFile, output -> output.write(content));
+        } catch (IOException ex) {
+            throw new UncheckedIOException("Не удалось сохранить данные ранобэ: " + getStateFilePath(), ex);
+        }
     }
 
     public synchronized void loadState(Map<String, RanobeItem> favorites,
@@ -123,10 +131,10 @@ public class RanobeStateRepository {
             if (!Files.exists(stateFile)) return;
             String text = Files.readString(stateFile, StandardCharsets.UTF_8);
             Object root = Json.parse(text);
-            if (!(root instanceof Map)) return;
+            if (!(root instanceof Map)) throw new IllegalArgumentException("Ожидался объект JSON");
             Map<?, ?> map = (Map<?, ?>) root;
 
-            ItemFactory<T> effectiveFactory = factory != null ? factory : (id, t, rt, d, c, s, r, rd, g, a) -> (T) new RanobeItem(id, t, rt, d, c, s, r, rd, g, a);
+            ItemFactory<T> effectiveFactory = Objects.requireNonNull(factory, "factory");
 
             Object favObj = map.get("favorites");
             if (favObj instanceof List && favorites != null) {
@@ -161,7 +169,10 @@ public class RanobeStateRepository {
                     readerPrefs.put(str(e.getKey()), str(e.getValue()));
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (IOException | RuntimeException ex) {
+            throw new IllegalStateException("Не удалось прочитать данные ранобэ: " + getStateFilePath()
+                    + ". Файл сохранён без изменений.", ex);
+        }
     }
 
     private static String itemToJson(RanobeItem item) {

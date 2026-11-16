@@ -1,5 +1,7 @@
 package com.luminaread.ui;
 
+import static com.luminaread.util.HtmlSanitizer.escapeHtml;
+
 import com.luminaread.model.Book;
 import com.luminaread.model.Bookmark;
 import com.luminaread.model.Highlight;
@@ -182,9 +184,9 @@ public class StatsAndNotesPanel extends JPanel {
                 BorderFactory.createEmptyBorder(10, 12, 10, 12)
         ));
 
-        JLabel info = new JLabel("<html><b>" + bm.getBookTitle() + "</b> — " + bm.getChapterTitle()
+        JLabel info = new JLabel("<html><b>" + escapeHtml(bm.getBookTitle()) + "</b> — " + escapeHtml(bm.getChapterTitle())
                 + " (стр. " + (bm.getPageIndex() + 1) + ")<br/>"
-                + "<span style='font-size:11px;'>" + bm.getLabel() + " • " + bm.getFormattedDate() + "</span></html>");
+                + "<span style='font-size:11px;'>" + escapeHtml(bm.getLabel()) + " • " + bm.getFormattedDate() + "</span></html>");
         info.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         info.setForeground(currentTheme.getTextPrimary());
 
@@ -196,7 +198,8 @@ public class StatsAndNotesPanel extends JPanel {
 
         JButton delBtn = ModernUiFactory.createFlatButton("Удалить", currentTheme);
         delBtn.addActionListener(e -> {
-            storageService.removeBookmark(bm.getId());
+            UiPersistenceErrors.save(this, "Не удалось сохранить удаление закладки.",
+                    () -> storageService.removeBookmark(bm.getId()));
             refreshData();
         });
 
@@ -217,9 +220,9 @@ public class StatsAndNotesPanel extends JPanel {
                 BorderFactory.createEmptyBorder(10, 12, 10, 12)
         ));
 
-        String notePart = hl.getNote().isBlank() ? "" : ("<br/><b>Заметка:</b> " + hl.getNote());
-        JLabel info = new JLabel("<html><b>" + hl.getBookTitle() + "</b> (" + hl.getChapterTitle() + ")<br/>"
-                + "<i>«" + hl.getSelectedText() + "»</i>" + notePart
+        String notePart = hl.getNote().isBlank() ? "" : ("<br/><b>Заметка:</b> " + escapeHtml(hl.getNote()));
+        JLabel info = new JLabel("<html><b>" + escapeHtml(hl.getBookTitle()) + "</b> (" + escapeHtml(hl.getChapterTitle()) + ")<br/>"
+                + "<i>«" + escapeHtml(hl.getSelectedText()) + "»</i>" + notePart
                 + "<br/><span style='font-size:10px;'>" + hl.getFormattedDate() + "</span></html>");
         info.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         info.setForeground(currentTheme.getTextPrimary());
@@ -232,7 +235,8 @@ public class StatsAndNotesPanel extends JPanel {
 
         JButton delBtn = ModernUiFactory.createFlatButton("Удалить", currentTheme);
         delBtn.addActionListener(e -> {
-            storageService.removeHighlight(hl.getId());
+            UiPersistenceErrors.save(this, "Не удалось сохранить удаление цитаты.",
+                    () -> storageService.removeHighlight(hl.getId()));
             refreshData();
         });
 
@@ -251,11 +255,15 @@ public class StatsAndNotesPanel extends JPanel {
         if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             try {
                 File out = chooser.getSelectedFile();
+                if (out.exists() && JOptionPane.showConfirmDialog(this, "Заменить существующий файл?",
+                        "Экспорт заметок", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
                 storageService.exportNotesAndHighlightsToMarkdown(out);
                 JOptionPane.showMessageDialog(this,
                         "Цитаты и закладки успешно экспортированы в:\n" + out.getAbsolutePath(),
                         "Экспорт завершен", JOptionPane.INFORMATION_MESSAGE);
             } catch (Exception ex) {
+                java.util.logging.Logger.getLogger(StatsAndNotesPanel.class.getName())
+                        .log(java.util.logging.Level.WARNING, "Не удалось экспортировать заметки", ex);
                 JOptionPane.showMessageDialog(this,
                         "Ошибка экспорта: " + ex.getMessage(),
                         "Ошибка", JOptionPane.ERROR_MESSAGE);

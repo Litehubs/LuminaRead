@@ -51,9 +51,9 @@ public class MangaLibClient {
             }
             String json = httpGetWithFailover(path, false);
             Object root = Json.parse(json);
-            if (!(root instanceof Map)) return list;
+            if (!(root instanceof Map)) throw new IOException("Некорректный ответ MangaLib");
             Object data = ((Map<?, ?>) root).get("data");
-            if (!(data instanceof List)) return list;
+            if (!(data instanceof List)) throw new IOException("В ответе MangaLib отсутствует список");
             for (Object o : (List<?>) data) {
                 if (!(o instanceof Map)) continue;
                 Map<?, ?> m = (Map<?, ?>) o;
@@ -76,7 +76,9 @@ public class MangaLibClient {
                         : typeLabel + (str(m.get("releaseDateString")).isEmpty() ? "" : " • " + str(m.get("releaseDateString")));
                 list.add(new MangaItem("mgl:" + slugUrl, title, rusName, desc, coverUrl, MGL_SOURCE, status, rating));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось выполнить поиск MangaLib", ex);
+        }
         return list;
     }
 
@@ -99,7 +101,10 @@ public class MangaLibClient {
                     if (!text.isEmpty()) return cleanDescription(text);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(MangaLibClient.class.getName())
+                    .log(java.util.logging.Level.FINE, "Полное описание MangaLib недоступно", ex);
+        }
         return "";
     }
 
@@ -116,6 +121,8 @@ public class MangaLibClient {
             ensureServersDiscovered();
             String json = httpGetWithFailover("/manga/" + slashEncode(slugUrl) + "/chapters", true);
             Object root = Json.parse(json);
+            if (!(root instanceof Map) || !(((Map<?, ?>) root).get("data") instanceof List))
+                throw new IOException("Некорректный список глав MangaLib");
             if (root instanceof Map) {
                 Object data = ((Map<?, ?>) root).get("data");
                 if (data instanceof List) {
@@ -133,7 +140,9 @@ public class MangaLibClient {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось загрузить главы MangaLib", ex);
+        }
         return chapters;
     }
 
@@ -165,7 +174,9 @@ public class MangaLibClient {
                     pages.add(primaryServer + "/" + clean);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось загрузить страницы MangaLib", ex);
+        }
         return pages;
     }
 
@@ -187,7 +198,9 @@ public class MangaLibClient {
                     if (!u.isEmpty()) rel.add(u);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось получить страницы MangaLib", ex);
+        }
         return rel;
     }
 
@@ -230,7 +243,10 @@ public class MangaLibClient {
                         }
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ex) {
+                java.util.logging.Logger.getLogger(MangaLibClient.class.getName())
+                        .log(java.util.logging.Level.FINE, "Не удалось обнаружить дополнительный сервер изображений", ex);
+            }
         }, "MangaLibServerDiscovery").start();
     }
 

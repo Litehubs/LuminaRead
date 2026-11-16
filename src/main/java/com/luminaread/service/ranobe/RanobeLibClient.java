@@ -4,7 +4,6 @@ import com.luminaread.model.ranobe.RanobeChapter;
 import com.luminaread.model.ranobe.RanobeChapterContent;
 import com.luminaread.model.ranobe.RanobeItem;
 import com.luminaread.service.IMediaCacheService;
-import com.luminaread.service.LibAccountService;
 import com.luminaread.service.MediaCacheService;
 import com.luminaread.util.HtmlSanitizer;
 import com.luminaread.util.Json;
@@ -36,25 +35,23 @@ public class RanobeLibClient {
     private final String primaryApiUrl;
     private final String secondaryApiUrl;
     private final IMediaCacheService mediaCacheService;
-    private final LibAccountService libAccountService;
     private final int connectTimeoutMs;
     private final int readTimeoutMs;
 
     public RanobeLibClient() {
-        this(API_PRIMARY, API_SECONDARY, MediaCacheService.getInstance(), LibAccountService.getInstance(), 8000, 20000);
+        this(API_PRIMARY, API_SECONDARY, MediaCacheService.getInstance(), 8000, 20000);
     }
 
     public RanobeLibClient(IMediaCacheService mediaCacheService) {
-        this(API_PRIMARY, API_SECONDARY, mediaCacheService, LibAccountService.getInstance(), 8000, 20000);
+        this(API_PRIMARY, API_SECONDARY, mediaCacheService, 8000, 20000);
     }
 
     public RanobeLibClient(String primaryApiUrl, String secondaryApiUrl,
-                           IMediaCacheService mediaCacheService, LibAccountService libAccountService,
+                           IMediaCacheService mediaCacheService,
                            int connectTimeoutMs, int readTimeoutMs) {
         this.primaryApiUrl = (primaryApiUrl != null && !primaryApiUrl.isEmpty()) ? primaryApiUrl : API_PRIMARY;
         this.secondaryApiUrl = (secondaryApiUrl != null && !secondaryApiUrl.isEmpty()) ? secondaryApiUrl : API_SECONDARY;
         this.mediaCacheService = mediaCacheService != null ? mediaCacheService : MediaCacheService.getInstance();
-        this.libAccountService = libAccountService != null ? libAccountService : LibAccountService.getInstance();
         this.connectTimeoutMs = connectTimeoutMs > 0 ? connectTimeoutMs : 8000;
         this.readTimeoutMs = readTimeoutMs > 0 ? readTimeoutMs : 20000;
     }
@@ -68,9 +65,9 @@ public class RanobeLibClient {
             }
             String json = executeGetWithFailover(path);
             Object root = Json.parse(json);
-            if (!(root instanceof Map)) return list;
+            if (!(root instanceof Map)) throw new IllegalStateException("Некорректный ответ RanobeLib");
             Object dataObj = ((Map<?, ?>) root).get("data");
-            if (!(dataObj instanceof List)) return list;
+            if (!(dataObj instanceof List)) throw new IllegalStateException("В ответе RanobeLib отсутствует список");
 
             for (Object o : (List<?>) dataObj) {
                 if (!(o instanceof Map)) continue;
@@ -97,7 +94,9 @@ public class RanobeLibClient {
 
                 list.add(new RanobeItem(slugUrl, title, rusName, desc, coverUrl, status, rating, releaseDate, null, null));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось выполнить поиск RanobeLib", ex);
+        }
         return list;
     }
 
@@ -145,7 +144,10 @@ public class RanobeLibClient {
                     basicItem.coverUrl, basicItem.status, basicItem.rating, releaseDate,
                     genres, authors
             );
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(RanobeLibClient.class.getName())
+                    .log(java.util.logging.Level.FINE, "Полное описание ранобэ недоступно", ex);
+        }
         return basicItem;
     }
 
@@ -156,9 +158,9 @@ public class RanobeLibClient {
             String path = "/manga/" + slashEncode(slugUrl) + "/chapters";
             String json = executeGetWithFailover(path);
             Object root = Json.parse(json);
-            if (!(root instanceof Map)) return chapters;
+            if (!(root instanceof Map)) throw new IllegalStateException("Некорректный ответ RanobeLib");
             Object dataObj = ((Map<?, ?>) root).get("data");
-            if (!(dataObj instanceof List)) return chapters;
+            if (!(dataObj instanceof List)) throw new IllegalStateException("В ответе RanobeLib отсутствует список глав");
 
             for (Object o : (List<?>) dataObj) {
                 if (!(o instanceof Map)) continue;
@@ -176,7 +178,9 @@ public class RanobeLibClient {
 
                 chapters.add(new RanobeChapter(chId, vol, num, chTitle, branchId, teamName));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось загрузить главы RanobeLib", ex);
+        }
         return chapters;
     }
 
@@ -221,7 +225,10 @@ public class RanobeLibClient {
                     if (parsed instanceof Map || parsed instanceof List) {
                         docHtml = docToHtml(parsed, illustrations, renderedImages);
                     }
-                } catch (Exception ignored) {}
+                } catch (IllegalArgumentException ex) {
+                    java.util.logging.Logger.getLogger(RanobeLibClient.class.getName()).fine(
+                            "Содержимое главы не является JSON; используется текстовый формат");
+                }
             }
             if (docHtml.isEmpty()) {
                 if (strContent.contains("<p") || strContent.contains("<div") || strContent.contains("<br")) {
@@ -315,10 +322,6 @@ public class RanobeLibClient {
         conn.setRequestProperty("Origin", RANOBE_ORIGIN);
         conn.setRequestProperty("Site-Id", "3");
 
-        if (libAccountService != null && libAccountService.isLoggedIn() && libAccountService.getCurrentUser().isTokenAuth) {
-            conn.setRequestProperty("Authorization", "Bearer " + libAccountService.getCurrentUser().token);
-        }
-
         conn.setConnectTimeout(connectTimeoutMs);
         conn.setReadTimeout(readTimeoutMs);
 
@@ -392,7 +395,8 @@ public class RanobeLibClient {
         } else if ("heading".equals(type)) {
             int level = 2;
             if (attrs != null && attrs.get("level") != null) {
-                try { level = Integer.parseInt(str(attrs.get("level"))); } catch (Exception ignored) {}
+                try { level = Integer.parseInt(str(attrs.get("level"))); }
+                catch (NumberFormatException ex) { /* Keep the default heading level. */ }
             }
             if (level < 1) level = 1;
             if (level > 4) level = 4;
@@ -610,7 +614,10 @@ public class RanobeLibClient {
                         collectDocText(parsed, sb);
                         return;
                     }
-                } catch (Exception ignored) {}
+                } catch (IllegalArgumentException ex) {
+                    java.util.logging.Logger.getLogger(RanobeLibClient.class.getName()).fine(
+                            "Описание не является JSON; используется обычный текст");
+                }
             }
             if (sb.length() > 0 && !sb.toString().endsWith(" ") && !sb.toString().endsWith("\n")) sb.append(' ');
             sb.append(HtmlSanitizer.htmlToPlainText(s));

@@ -1,5 +1,7 @@
 package com.luminaread.service;
 
+import com.luminaread.config.OpdsCatalogConfig;
+import com.luminaread.config.ReaderDisplayConfig;
 import com.luminaread.config.SettingsJsonRepository;
 import com.luminaread.model.Book;
 import com.luminaread.model.BookContent;
@@ -8,15 +10,19 @@ import com.luminaread.model.Chapter;
 import com.luminaread.model.Highlight;
 import com.luminaread.model.ReaderSettings;
 import com.luminaread.parser.BookParserFactory;
+import com.luminaread.util.AtomicFile;
+import com.luminaread.util.HtmlSanitizer;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
+import java.io.ObjectInputFilter;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,9 +34,34 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 public class LibraryStorageService {
+    private static final long MAX_STATE_BYTES = 256L * 1024 * 1024;
+    private static final long MAX_COVER_BYTES = 64L * 1024 * 1024;
+    private static final int MAX_STATE_ENTRIES = 1_000_000;
+    private static final Set<Class<?>> STATE_CLASSES = Set.of(
+            PersistentState.class, Book.class, Bookmark.class, Highlight.class, ReaderSettings.class,
+            ReaderDisplayConfig.class, OpdsCatalogConfig.class, ReaderDisplayConfig.TextAlignment.class,
+            ReaderDisplayConfig.ReadingMode.class, ReaderSettings.TextAlignment.class,
+            ReaderSettings.ReadingMode.class, ArrayList.class, String.class, Enum.class
+    );
+
+    private static ObjectInputFilter.Status filterState(ObjectInputFilter.FilterInfo input) {
+        if (input.depth() > 32 || input.references() > MAX_STATE_ENTRIES || input.streamBytes() > MAX_STATE_BYTES) {
+            return ObjectInputFilter.Status.REJECTED;
+        }
+        Class<?> type = input.serialClass();
+        if (type == null) return ObjectInputFilter.Status.UNDECIDED;
+        if (type == byte[].class && input.arrayLength() <= MAX_COVER_BYTES
+                || type == Object[].class && input.arrayLength() <= MAX_STATE_ENTRIES
+                || STATE_CLASSES.contains(type)) {
+            return ObjectInputFilter.Status.ALLOWED;
+        }
+        return ObjectInputFilter.Status.REJECTED;
+    }
+
 
     private static class PersistentState implements Serializable {
         private static final long serialVersionUID = 1L;
@@ -38,6 +69,8 @@ public class LibraryStorageService {
         List<Bookmark> bookmarks = new ArrayList<>();
         List<Highlight> highlights = new ArrayList<>();
         ReaderSettings settings = new ReaderSettings();
+        // False for older serialized files, whose settings.json must still be imported.
+        boolean settingsEmbeddedAuthoritative;
     }
 
     private final Path dataDir;
@@ -54,8 +87,12 @@ public class LibraryStorageService {
     };
 
     public LibraryStorageService() {
-        this.dataDir = Path.of(System.getProperty("user.home"), ".luminaread");
-        this.booksDir = Path.of(System.getProperty("user.home"), "LuminaRead_Books");
+        this(Path.of(System.getProperty("user.home")));
+    }
+
+    LibraryStorageService(Path home) {
+        this.dataDir = home.resolve(".luminaread");
+        this.booksDir = home.resolve("LuminaRead_Books");
         this.stateFile = dataDir.resolve("library_state.bin");
         initDirectories();
         loadState();
@@ -65,7 +102,8 @@ public class LibraryStorageService {
         try {
             Files.createDirectories(dataDir);
             Files.createDirectories(booksDir);
-        } catch (Exception ignored) {
+        } catch (IOException ex) {
+            throw new UncheckedIOException("Не удалось создать папки библиотеки", ex);
         }
     }
 
@@ -73,6 +111,10 @@ public class LibraryStorageService {
         if (Files.exists(stateFile)) {
             try (ObjectInputStream ois = new ObjectInputStream(
                     new BufferedInputStream(new FileInputStream(stateFile.toFile()), 32768))) {
+                if (Files.size(stateFile) > MAX_STATE_BYTES) throw new IOException("Файл библиотеки слишком большой");
+                ObjectInputFilter filter = LibraryStorageService::filterState;
+                ObjectInputFilter existing = ois.getObjectInputFilter();
+                ois.setObjectInputFilter(existing == null ? filter : ObjectInputFilter.merge(filter, existing));
                 Object obj = ois.readObject();
                 if (obj instanceof PersistentState loaded) {
                     this.state = loaded;
@@ -80,34 +122,44 @@ public class LibraryStorageService {
                         this.state.settings = new ReaderSettings();
                     }
                     Path jsonSettingsFile = dataDir.resolve("settings.json");
-                    if (Files.exists(jsonSettingsFile)) {
-                        settingsJsonRepository.load(this.state.settings.getDisplayConfig(),
-                                this.state.settings.getOpdsConfig(), jsonSettingsFile);
+                    if (!this.state.settingsEmbeddedAuthoritative && Files.exists(jsonSettingsFile)) {
+                        loadLegacySettings(jsonSettingsFile);
                     }
                     return;
                 }
-            } catch (Exception ignored) {
+                throw new IOException("Неизвестный формат библиотеки");
+            } catch (IOException | ClassNotFoundException | RuntimeException ex) {
+                throw new IllegalStateException("Не удалось прочитать библиотеку: " + stateFile
+                        + ". Файл сохранён без изменений.", ex);
             }
         }
         this.state = new PersistentState();
         Path jsonSettingsFile = dataDir.resolve("settings.json");
         if (Files.exists(jsonSettingsFile)) {
-            settingsJsonRepository.load(this.state.settings.getDisplayConfig(),
-                    this.state.settings.getOpdsConfig(), jsonSettingsFile);
+            loadLegacySettings(jsonSettingsFile);
+        }
+    }
+
+    private void loadLegacySettings(Path settingsFile) {
+        if (!settingsJsonRepository.load(state.settings.getDisplayConfig(), state.settings.getOpdsConfig(), settingsFile)) {
+            throw new IllegalStateException("Не удалось прочитать настройки: " + settingsFile
+                    + ". Файл сохранён без изменений.");
         }
     }
 
     public synchronized void saveState() {
-        try (ObjectOutputStream oos = new ObjectOutputStream(
-                new BufferedOutputStream(new FileOutputStream(stateFile.toFile()), 32768))) {
-            oos.writeObject(state);
-        } catch (Exception ignored) {
-        }
         try {
+            state.settingsEmbeddedAuthoritative = true;
+            AtomicFile.write(stateFile, output -> {
+                ObjectOutputStream oos = new ObjectOutputStream(new BufferedOutputStream(output, 32768));
+                oos.writeObject(state);
+                oos.flush();
+            });
             Path jsonSettingsFile = dataDir.resolve("settings.json");
             settingsJsonRepository.save(this.state.settings.getDisplayConfig(),
                     this.state.settings.getOpdsConfig(), jsonSettingsFile);
-        } catch (Exception ignored) {
+        } catch (IOException ex) {
+            throw new UncheckedIOException("Не удалось сохранить библиотеку: " + stateFile, ex);
         }
     }
 
@@ -179,8 +231,9 @@ public class LibraryStorageService {
             ImportDestination destination = reserveImportDestination(sourceFile.toPath());
             Path dest = destination.path();
             if (destination.reserved()) {
-                Path temp = Files.createTempFile(booksDir, ".luminaread-import-", ".tmp");
+                Path temp = null;
                 try {
+                    temp = Files.createTempFile(booksDir, ".luminaread-import-", ".tmp");
                     Files.copy(sourceFile.toPath(), temp, StandardCopyOption.REPLACE_EXISTING);
                     try {
                         Files.move(temp, dest, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -189,10 +242,9 @@ public class LibraryStorageService {
                     }
                     copiedForImport = true;
                 } catch (Exception ex) {
-                    Files.deleteIfExists(dest);
+                    deleteAfterFailure(dest, ex);
+                    if (temp != null) deleteAfterFailure(temp, ex);
                     throw ex;
-                } finally {
-                    Files.deleteIfExists(temp);
                 }
             }
             targetFile = dest.toFile();
@@ -204,7 +256,7 @@ public class LibraryStorageService {
             format = BookParserFactory.detectFormatLabel(targetFile);
             parsed = BookParserFactory.parseBook(targetFile);
         } catch (Exception ex) {
-            if (copiedForImport) Files.deleteIfExists(targetFile.toPath());
+            if (copiedForImport) deleteAfterFailure(targetFile.toPath(), ex);
             throw ex;
         }
 
@@ -257,7 +309,7 @@ public class LibraryStorageService {
                         Files.createFile(candidate);
                         return new ImportDestination(candidate, true);
                     } catch (java.nio.file.FileAlreadyExistsException ignored) {
-
+                        // Another import reserved this name; try the next suffix.
                     }
                 }
             }
@@ -265,6 +317,14 @@ public class LibraryStorageService {
     }
 
     private record ImportDestination(Path path, boolean reserved) {}
+
+    private static void deleteAfterFailure(Path file, Exception failure) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException cleanupFailure) {
+            failure.addSuppressed(cleanupFailure);
+        }
+    }
 
     public BookContent loadBookContent(Book book) throws Exception {
         synchronized (this) {
@@ -299,9 +359,9 @@ public class LibraryStorageService {
         }
         long len = file != null && file.exists() ? file.length() : 0L;
         String title = (book != null && book.getTitle() != null) ? book.getTitle() : "Книга";
-        String infoHtml = "<h2>" + title + "</h2>\n"
+        String infoHtml = "<h2>" + HtmlSanitizer.escapeHtml(title) + "</h2>\n"
                 + "<p>К сожалению, внутри скачанного файла (<code>"
-                + (file != null ? file.getName() : "") + "</code>, размер: " + len + " байт) не обнаружено открытого текстового слоя или глав.</p>\n"
+                + (file != null ? HtmlSanitizer.escapeHtml(file.getName()) : "") + "</code>, размер: " + len + " байт) не обнаружено открытого текстового слоя или глав.</p>\n"
                 + "<p><b>Почему это могло произойти:</b></p>\n"
                 + "<p>1) В каталоге Open Library / Internet Archive эта современная книга защищена авторским правом (режим <i>Borrow / Controlled Digital Lending</i>) и недоступна для свободного скачивания без аккаунта;</p>\n"
                 + "<p>2) Или онлайн-зеркало вернуло пустой ответ вместо архива EPUB/FB2.</p>\n"
@@ -312,17 +372,21 @@ public class LibraryStorageService {
 
     public synchronized void removeBook(Book book, boolean deleteFileFromDisk) {
         if (book == null) return;
+        Book stored = state.books.stream().filter(b -> b.getId().equals(book.getId())).findFirst().orElse(null);
+        if (stored == null) return;
         state.books.removeIf(b -> b.getId().equals(book.getId()));
         state.bookmarks.removeIf(bm -> bm.getBookId().equals(book.getId()));
         state.highlights.removeIf(hl -> hl.getBookId().equals(book.getId()));
         parsedBookCache.remove(book.getId());
+        // Persist the library change before touching the user's original file.
+        saveState();
         if (deleteFileFromDisk) {
             try {
-                Files.deleteIfExists(Path.of(book.getFilePath()));
-            } catch (Exception ignored) {
+                Files.deleteIfExists(Path.of(stored.getFilePath()));
+            } catch (IOException ex) {
+                throw new UncheckedIOException("Книга удалена из библиотеки, но файл не удалось удалить: " + stored.getFilePath(), ex);
             }
         }
-        saveState();
     }
 
     public synchronized void addBookmark(Bookmark bookmark) {
@@ -337,7 +401,7 @@ public class LibraryStorageService {
         saveState();
     }
 
-    public List<Bookmark> getBookmarks(String bookIdFilter) {
+    public synchronized List<Bookmark> getBookmarks(String bookIdFilter) {
         if (bookIdFilter == null || bookIdFilter.isBlank()) {
             return new ArrayList<>(state.bookmarks);
         }
@@ -358,7 +422,7 @@ public class LibraryStorageService {
         saveState();
     }
 
-    public List<Highlight> getHighlights(String bookIdFilter) {
+    public synchronized List<Highlight> getHighlights(String bookIdFilter) {
         if (bookIdFilter == null || bookIdFilter.isBlank()) {
             return new ArrayList<>(state.highlights);
         }
@@ -368,14 +432,20 @@ public class LibraryStorageService {
     }
 
     public void exportNotesAndHighlightsToMarkdown(File targetFile) throws Exception {
+        List<Highlight> highlights;
+        List<Bookmark> bookmarks;
+        synchronized (this) {
+            highlights = List.copyOf(state.highlights);
+            bookmarks = List.copyOf(state.bookmarks);
+        }
         StringBuilder md = new StringBuilder();
         md.append("# Экспорт цитат, заметок и закладок — LuminaRead\n\n");
 
-        md.append("## Выделенные цитаты и заметки (").append(state.highlights.size()).append(")\n\n");
-        if (state.highlights.isEmpty()) {
+        md.append("## Выделенные цитаты и заметки (").append(highlights.size()).append(")\n\n");
+        if (highlights.isEmpty()) {
             md.append("_Нет сохраненных цитат._\n\n");
         } else {
-            for (Highlight h : state.highlights) {
+            for (Highlight h : highlights) {
                 md.append("### ").append(h.getBookTitle()).append(" — ").append(h.getChapterTitle()).append("\n");
                 md.append("> ").append(h.getSelectedText().replace("\n", "\n> ")).append("\n\n");
                 if (!h.getNote().isBlank()) {
@@ -385,17 +455,18 @@ public class LibraryStorageService {
             }
         }
 
-        md.append("## Закладки (").append(state.bookmarks.size()).append(")\n\n");
-        if (state.bookmarks.isEmpty()) {
+        md.append("## Закладки (").append(bookmarks.size()).append(")\n\n");
+        if (bookmarks.isEmpty()) {
             md.append("_Нет сохраненных закладок._\n");
         } else {
-            for (Bookmark bm : state.bookmarks) {
+            for (Bookmark bm : bookmarks) {
                 md.append("* **").append(bm.getBookTitle()).append("** (")
                   .append(bm.getChapterTitle()).append(", стр. ").append(bm.getPageIndex() + 1)
                   .append(") — ").append(bm.getLabel())
                   .append(" _(").append(bm.getFormattedDate()).append(")_\n");
             }
         }
-        Files.writeString(targetFile.toPath(), md.toString(), StandardCharsets.UTF_8);
+        byte[] contents = md.toString().getBytes(StandardCharsets.UTF_8);
+        AtomicFile.write(targetFile.toPath(), output -> output.write(contents));
     }
 }

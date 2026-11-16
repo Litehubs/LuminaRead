@@ -40,9 +40,9 @@ public class RemangaClient {
             }
             String json = httpGet(apiUrl);
             Object root = Json.parse(json);
-            if (!(root instanceof Map)) return list;
+            if (!(root instanceof Map)) throw new IOException("Некорректный ответ Remanga");
             Object data = ((Map<?, ?>) root).get("content");
-            if (!(data instanceof List)) return list;
+            if (!(data instanceof List)) throw new IOException("В ответе Remanga отсутствует список");
             for (Object o : (List<?>) data) {
                 if (!(o instanceof Map)) continue;
                 Map<?, ?> m = (Map<?, ?>) o;
@@ -66,7 +66,9 @@ public class RemangaClient {
                 list.add(new MangaItem("rem:" + dir, title, rusName, desc.length() == 0 ? "Описание на странице тайтла." : desc.toString(),
                         coverUrl, REM_SOURCE, status, rating.isEmpty() ? "★ —" : "★ " + rating));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось выполнить поиск Remanga", ex);
+        }
         return list;
     }
 
@@ -83,7 +85,10 @@ public class RemangaClient {
                     if (!text.isEmpty()) return cleanDescription(text);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(RemangaClient.class.getName())
+                    .log(java.util.logging.Level.FINE, "Полное описание Remanga недоступно", ex);
+        }
         return manga.description != null && !manga.description.isEmpty() ? manga.description : "Описание отсутствует.";
     }
 
@@ -94,6 +99,8 @@ public class RemangaClient {
             String dir = manga.id.startsWith("rem:") ? manga.id.substring(4) : manga.id;
             String titleJson = httpGet(REM_API + "/titles/" + slashEncode(dir) + "/");
             Object tr = Json.parse(titleJson);
+            if (!(tr instanceof Map) || !(((Map<?, ?>) tr).get("content") instanceof Map))
+                throw new IOException("Некорректные данные произведения Remanga");
             if (tr instanceof Map) {
                 Object contentObj = ((Map<?, ?>) tr).get("content");
                 if (contentObj instanceof Map) {
@@ -114,9 +121,10 @@ public class RemangaClient {
                                 String chJson = httpGet(REM_API + "/titles/chapters/?branch_id=" + branchParam
                                         + "&count=100&ordering=index&page=" + page);
                                 Object cr = Json.parse(chJson);
-                                if (!(cr instanceof Map)) break;
+                                if (!(cr instanceof Map)) throw new IOException("Некорректный список глав Remanga");
                                 Object chData = ((Map<?, ?>) cr).get("content");
-                                if (!(chData instanceof List) || ((List<?>) chData).isEmpty()) break;
+                                if (!(chData instanceof List)) throw new IOException("Некорректный список глав Remanga");
+                                if (((List<?>) chData).isEmpty()) break;
                                 for (Object o : (List<?>) chData) {
                                     if (!(o instanceof Map)) continue;
                                     Map<?, ?> c = (Map<?, ?>) o;
@@ -135,7 +143,9 @@ public class RemangaClient {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось загрузить главы Remanga", ex);
+        }
         return chapters;
     }
 
@@ -167,7 +177,9 @@ public class RemangaClient {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось загрузить страницы Remanga", ex);
+        }
         return pages;
     }
 

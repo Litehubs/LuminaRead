@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -26,6 +27,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 public class Fb2Parser implements BookParser {
+
+    private static final int MAX_FB2_BYTES = 64 * 1024 * 1024;
+    private static final int MAX_ZIP_ENTRIES = 10000;
 
     private static final Pattern BINARY_PATTERN = Pattern.compile(
             "<binary\\b([^>]*)>(.*?)</binary>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
@@ -118,13 +122,8 @@ public class Fb2Parser implements BookParser {
         Matcher bodyMatcher = bodyPattern.matcher(xml);
         String bodyContent = bodyMatcher.find() ? bodyMatcher.group(1) : xml;
 
-        Pattern sectionPattern = Pattern.compile("<section[^>]*>(.*?)</section>",
-                Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
-        Matcher sectionMatcher = sectionPattern.matcher(bodyContent);
-
         int index = 0;
-        while (sectionMatcher.find()) {
-            String sectionXml = sectionMatcher.group(1);
+        for (String sectionXml : topLevelSections(bodyContent)) {
             String title = extractTitle(sectionXml, "Глава " + (index + 1));
             String html = fb2SectionToHtml(sectionXml, imageUriById);
             String text = cleanFb2MarkupToText(sectionXml);
@@ -161,6 +160,24 @@ public class Fb2Parser implements BookParser {
         return content;
     }
 
+    private static List<String> topLevelSections(String body) {
+        List<String> sections = new ArrayList<>();
+        Matcher tags = Pattern.compile("<!--.*?-->|<!\\[CDATA\\[.*?]]>|<(/?)section\\b(?:\"[^\"]*\"|'[^']*'|[^'\">])*>",
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(body);
+        int depth = 0;
+        int start = -1;
+        while (tags.find()) {
+            if (tags.group(1) == null) continue;
+            if (tags.group(1).isEmpty() && tags.group().matches("(?s).*/\\s*>")) continue;
+            if (tags.group(1).isEmpty()) {
+                if (depth++ == 0) start = tags.end();
+            } else if (depth > 0 && --depth == 0) {
+                sections.add(body.substring(start, tags.start()));
+            }
+        }
+        return sections;
+    }
+
     private Map<String, String> extractAndCacheImages(String xml, File file, BookContent content) {
         Map<String, String> uriById = new HashMap<>();
         Path cacheDir = getFb2ImageCacheDir(file.getName());
@@ -193,10 +210,7 @@ public class Fb2Parser implements BookParser {
                 content.setCoverImage(imgBytes);
                 coverFound = true;
             }
-            try {
-                content.putEmbeddedImage(id, imgBytes);
-            } catch (Exception ignored) {
-            }
+            content.putEmbeddedImage(id, imgBytes);
             if (cacheDir != null) {
                 try {
                     String ext = extForType(type, id);
@@ -207,7 +221,9 @@ public class Fb2Parser implements BookParser {
                     Path target = cacheDir.resolve(safe);
                     Files.write(target, imgBytes);
                     uriById.put(id, target.toUri().toString());
-                } catch (Exception ignored) {
+                } catch (Exception ex) {
+                    java.util.logging.Logger.getLogger(Fb2Parser.class.getName())
+                            .log(java.util.logging.Level.WARNING, "Не удалось сохранить изображение книги", ex);
                 }
             }
         }
@@ -242,6 +258,8 @@ public class Fb2Parser implements BookParser {
             Files.createDirectories(dir);
             return dir;
         } catch (Exception e) {
+            java.util.logging.Logger.getLogger(Fb2Parser.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Не удалось создать кэш изображений FB2", e);
             return null;
         }
     }
@@ -300,35 +318,49 @@ public class Fb2Parser implements BookParser {
     }
 
     private byte[] readActualFb2Bytes(File file) throws IOException {
-        byte[] fileBytes = Files.readAllBytes(file.toPath());
+        byte[] fileBytes;
+        try (InputStream input = Files.newInputStream(file.toPath())) {
+            fileBytes = readBounded(input);
+        }
 
         if (fileBytes.length > 2 && (fileBytes[0] & 0xFF) == 0x1F && (fileBytes[1] & 0xFF) == 0x8B) {
-            try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(fileBytes));
-                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                gis.transferTo(baos);
-                fileBytes = baos.toByteArray();
-            } catch (Exception ignored) {
+            try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(fileBytes))) {
+                fileBytes = readBounded(gis);
             }
         }
 
         if (fileBytes.length > 4 && fileBytes[0] == 'P' && fileBytes[1] == 'K') {
             try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(fileBytes))) {
                 ZipEntry entry;
+                int entries = 0;
                 while ((entry = zis.getNextEntry()) != null) {
+                    if (++entries > MAX_ZIP_ENTRIES) throw new IOException("Слишком много файлов в архиве FB2");
+                    if (entry.isDirectory() && zis.read() != -1) {
+                        throw new IOException("Папка в архиве FB2 содержит данные");
+                    }
                     if (!entry.isDirectory()) {
-                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                        byte[] buffer = new byte[8192];
-                        int len;
-                        while ((len = zis.read(buffer)) > 0) {
-                            baos.write(buffer, 0, len);
-                        }
-                        return baos.toByteArray();
+                        return readBounded(zis);
                     }
                 }
-            } catch (Exception ignored) {
             }
+            throw new IOException("В архиве FB2 не найдено файлов");
         }
         return fileBytes;
+    }
+
+    private static byte[] readBounded(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int count;
+        int total = 0;
+        while ((count = input.read(buffer)) != -1) {
+            if (count > MAX_FB2_BYTES - total) {
+                throw new IOException("Размер книги FB2 превышает допустимые 64 МиБ");
+            }
+            output.write(buffer, 0, count);
+            total += count;
+        }
+        return output.toByteArray();
     }
 
     private String stripScriptsAndStyles(String html) {

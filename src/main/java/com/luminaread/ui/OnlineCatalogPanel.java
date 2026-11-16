@@ -6,6 +6,7 @@ import com.luminaread.model.OnlineBookItem;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
 import com.luminaread.util.WrapLayout;
+import com.luminaread.service.OnlineCatalogService.SearchResult;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -24,7 +25,6 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.io.File;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -43,6 +43,7 @@ public class OnlineCatalogPanel extends JPanel {
     private final JScrollPane resultsScroll;
     private final JLabel statusLabel;
     private final JProgressBar downloadProgressBar;
+    private final LatestSwingRequest<SearchResult> catalogRequests = new LatestSwingRequest<>();
 
     private ThemePalette currentTheme;
 
@@ -167,23 +168,14 @@ public class OnlineCatalogPanel extends JPanel {
         resultsListPanel.revalidate();
         resultsListPanel.repaint();
 
-        Thread searchThread = new Thread(() -> {
-            List<OnlineBookItem> items = catalogService.searchBooks(query, sourceCode, langCode);
-            SwingUtilities.invokeLater(() -> {
-                downloadProgressBar.setIndeterminate(false);
-                downloadProgressBar.setVisible(false);
-                renderSearchResults(items);
-            });
-        }, "LuminaRead-OnlineSearch");
-        searchThread.setDaemon(true);
-        searchThread.start();
+        startCatalogLoad(() -> catalogService.searchBooksDetailed(query, sourceCode, langCode));
     }
 
     private void executeCustomOpdsBrowse() {
         String opdsUrl = customUrlField.getText().trim();
         if (opdsUrl.isEmpty()) return;
         storageService.getSettings().addCustomOpdsCatalog(opdsUrl);
-        storageService.saveState();
+        UiPersistenceErrors.save(this, "Не удалось сохранить каталог в настройках.", storageService::saveState);
 
         statusLabel.setText("Загрузка OPDS-каталога: " + opdsUrl + " ...");
         downloadProgressBar.setIndeterminate(true);
@@ -191,16 +183,27 @@ public class OnlineCatalogPanel extends JPanel {
         downloadProgressBar.setVisible(true);
 
         String term = searchQueryField.getText().trim();
-        Thread t = new Thread(() -> {
-            List<OnlineBookItem> items = catalogService.browseCustomOpds(opdsUrl, term);
-            SwingUtilities.invokeLater(() -> {
-                downloadProgressBar.setIndeterminate(false);
-                downloadProgressBar.setVisible(false);
-                renderSearchResults(items);
-            });
-        }, "LuminaRead-OpdsBrowse");
-        t.setDaemon(true);
-        t.start();
+        startCatalogLoad(() -> new SearchResult(catalogService.browseCustomOpds(opdsUrl, term), List.of()));
+    }
+
+    private void startCatalogLoad(java.util.function.Supplier<SearchResult> request) {
+        catalogRequests.start(request::get, result -> {
+            hideCatalogProgress();
+            renderSearchResults(result);
+        }, error -> {
+            java.util.logging.Logger.getLogger(OnlineCatalogPanel.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Ошибка загрузки каталога", error);
+            hideCatalogProgress();
+            resultsListPanel.removeAll();
+            resultsListPanel.revalidate();
+            resultsListPanel.repaint();
+            statusLabel.setText("Не удалось загрузить каталог. Проверьте адрес и подключение.");
+        });
+    }
+
+    private void hideCatalogProgress() {
+        downloadProgressBar.setIndeterminate(false);
+        downloadProgressBar.setVisible(false);
     }
 
     private void executeDirectUrlDownload() {
@@ -212,10 +215,10 @@ public class OnlineCatalogPanel extends JPanel {
         downloadAndImportBook(url, "Скачанная книга", null);
     }
 
-    private void renderSearchResults(List<OnlineBookItem> items) {
+    private void renderSearchResults(SearchResult result) {
+        List<OnlineBookItem> items = result.books();
         resultsListPanel.removeAll();
-        if (items == null || items.isEmpty()) {
-            statusLabel.setText("Книги не найдены или выбранный каталог временно недоступен.");
+        if (items.isEmpty()) {
             JLabel empty = new JLabel(
                     "<html><div style='padding:24px;'>"
                             + "<h3>По вашему запросу ничего не найдено</h3>"
@@ -226,12 +229,16 @@ public class OnlineCatalogPanel extends JPanel {
             empty.setForeground(currentTheme.getTextSecondary());
             resultsListPanel.add(empty);
         } else {
-            statusLabel.setText("Найдено книг для скачивания: " + items.size());
             for (OnlineBookItem item : items) {
                 resultsListPanel.add(createOnlineBookCard(item));
                 resultsListPanel.add(Box.createVerticalStrut(12));
             }
         }
+        String status = items.isEmpty() ? "Книги не найдены." : "Найдено книг для скачивания: " + items.size();
+        if (!result.unavailableSources().isEmpty()) {
+            status += " · Не удалось загрузить: " + String.join(", ", result.unavailableSources());
+        }
+        statusLabel.setText(status);
         resultsListPanel.revalidate();
         resultsListPanel.repaint();
     }
@@ -248,12 +255,12 @@ public class OnlineCatalogPanel extends JPanel {
         textCol.setLayout(new BoxLayout(textCol, BoxLayout.Y_AXIS));
         textCol.setOpaque(false);
 
-        JLabel titleLbl = new JLabel(item.getTitle());
+        JLabel titleLbl = ModernUiFactory.plainTextLabel(item.getTitle());
         titleLbl.setFont(ModernUiFactory.uiFont(Font.BOLD, 15));
         titleLbl.setForeground(currentTheme.getTextPrimary());
         titleLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel metaLbl = new JLabel(item.getAuthor() + "  •  Источник: " + item.getSourceName()
+        JLabel metaLbl = ModernUiFactory.plainTextLabel(item.getAuthor() + "  •  Источник: " + item.getSourceName()
                 + "  •  Язык: " + item.getLanguage());
         metaLbl.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
         metaLbl.setForeground(currentTheme.getTextSecondary());
@@ -293,7 +300,7 @@ public class OnlineCatalogPanel extends JPanel {
     }
 
     private void downloadAndImportBook(String url, String title, String formatHint) {
-        DownloadTask task = catalogService.createTrackedTask(title, formatHint, url);
+        DownloadTask task = catalogService.createLibraryDownload(title, formatHint, url);
 
         statusLabel.setText("Скачивание «" + title + "»: 0%");
         downloadProgressBar.setIndeterminate(false);
@@ -303,19 +310,16 @@ public class OnlineCatalogPanel extends JPanel {
 
         Thread dlThread = new Thread(() -> {
             try {
-                File savedFile = catalogService.downloadBookFileWithTask(
-                        task, storageService.getBooksDir(),
+                Book imported = catalogService.downloadAndImportBook(
+                        task, storageService,
                         progress -> SwingUtilities.invokeLater(() -> {
                             int pct = task.getProgressPercent();
                             downloadProgressBar.setIndeterminate(false);
                             downloadProgressBar.setValue(pct);
                             downloadProgressBar.setString(pct + "%");
-                            statusLabel.setText("Скачивание «" + title + "»: " + task.getFormattedProgressDetails());
+                            statusLabel.setText(task.getFormattedProgressDetails());
                         })
                 );
-                Book imported = storageService.importBookFile(savedFile, false);
-                task.setImportedBook(imported);
-                catalogService.notifyDownloadListeners();
 
                 SwingUtilities.invokeLater(() -> {
                     downloadProgressBar.setValue(100);
@@ -334,10 +338,10 @@ public class OnlineCatalogPanel extends JPanel {
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
                     downloadProgressBar.setVisible(false);
-                    statusLabel.setText("Ошибка при скачивании: " + ex.getMessage());
+                    statusLabel.setText(task.getFormattedProgressDetails());
                     JOptionPane.showMessageDialog(
                             OnlineCatalogPanel.this,
-                            "Не удалось скачать файл по ссылке:\n" + url + "\nПричина: " + ex.getMessage(),
+                            task.getFormattedProgressDetails(),
                             "Ошибка загрузки",
                             JOptionPane.ERROR_MESSAGE
                     );

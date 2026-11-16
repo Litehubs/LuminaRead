@@ -1,8 +1,5 @@
 package com.luminaread;
 
-import com.luminaread.service.LibAccountService;
-import com.luminaread.service.LibAccountService.LibBookmarkItem;
-import com.luminaread.service.LibAccountService.LibUser;
 import com.luminaread.service.RanobeService;
 import com.luminaread.service.RanobeService.RanobeChapter;
 import com.luminaread.service.RanobeService.RanobeChapterContent;
@@ -18,9 +15,8 @@ import java.util.*;
 
 public class RanobeSmokeTest {
     public static void main(String[] args) throws Exception {
-        System.out.println("=== RUNNING RANOBE, YANDEX ID & LIB.SOCIAL SMOKE TESTS ===");
+        System.out.println("=== RUNNING RANOBE & YANDEX ID SMOKE TESTS ===");
         RanobeService service = new RanobeService();
-        LibAccountService accountService = LibAccountService.getInstance();
         YandexAuthService yaService = YandexAuthService.getInstance();
 
         System.out.println("1. Тестирование поиска в RanobeLib...");
@@ -154,27 +150,13 @@ public class RanobeSmokeTest {
         System.out.println("Состояние ранобэ сохранено и успешно восстановлено!");
 
         System.out.println("6. Тестирование Яндекс ID (YandexAuthService)...");
-        YandexUser yaUser = yaService.loginWithLoginOrEmail("ruslan_user@yandex.ru");
-        System.out.println("Подключен профиль Яндекс: " + yaUser.getDisplayTitle() + ", email: " + yaUser.defaultEmail);
-        yaService.linkLibSocial("10300544", "UltraBebrik6432");
-        YandexUser yaLinked = yaService.getCurrentUser();
-        if (!"UltraBebrik6432".equals(yaLinked.linkedLibUsername)) {
-            throw new RuntimeException("Yandex ID Lib.social link verification failed!");
-        }
-        System.out.println("Профиль Яндекс успешно связан с аккаунтом Lib.social: " + yaLinked.linkedLibUsername);
-
-        System.out.println("7. Тестирование профиля и закладок Lib.social...");
         try {
-            LibUser user = accountService.loginWithProfile("10300544");
-            System.out.println("Подключен профиль Lib.social: " + user.username + " (ID: " + user.id + ")");
-            List<LibBookmarkItem> ranobeBookmarks = accountService.fetchUserBookmarks(3, 0);
-            System.out.println("Закладок RanobeLib получено: " + ranobeBookmarks.size());
-            List<LibBookmarkItem> mangaBookmarks = accountService.fetchUserBookmarks(1, 0);
-            System.out.println("Закладок MangaLib получено: " + mangaBookmarks.size());
-        } catch (Exception ex) {
-            System.out.println("Тест профиля выполнен с исключением (возможно, сетевое ограничение): " + ex.getMessage());
+            yaService.loginWithLoginOrEmail("example@yandex.ru");
+            throw new AssertionError("A username alone must not authenticate a Yandex account");
+        } catch (IllegalArgumentException expected) {
+            System.out.println("Неподтверждённый логин не считается авторизацией.");
         }
 
-        System.out.println("=== ALL RANOBE, YANDEX ID & LIB.SOCIAL TESTS PASSED! ===");
+        System.out.println("=== ALL RANOBE & YANDEX ID TESTS PASSED! ===");
     }
 }

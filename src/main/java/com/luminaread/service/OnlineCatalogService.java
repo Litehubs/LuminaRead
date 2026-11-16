@@ -1,8 +1,10 @@
 package com.luminaread.service;
 
+import com.luminaread.model.Book;
 import com.luminaread.model.DownloadTask;
 import com.luminaread.model.OnlineBookItem;
 import com.luminaread.service.catalog.BookDownloader;
+import com.luminaread.service.catalog.CatalogResponseBody;
 import com.luminaread.service.catalog.IBookDownloader;
 import com.luminaread.service.catalog.OpdsFeedParser;
 
@@ -18,13 +20,17 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.function.DoubleConsumer;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Online catalog service coordinating book search across OPDS and JSON providers,
@@ -32,16 +38,11 @@ import java.util.regex.Pattern;
  * feed parsing to {@link OpdsFeedParser} and file downloading to {@link IBookDownloader}.
  */
 public class OnlineCatalogService implements IOnlineCatalogService {
+    private static final Logger LOG = Logger.getLogger(OnlineCatalogService.class.getName());
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) LuminaRead/2.2";
 
-    private static final Pattern GUTENDEX_ID_TITLE_PATTERN = Pattern.compile(
-            "\\{\"id\":\\s*(\\d+)\\s*,\\s*\"title\":\\s*\"((?:[^\"\\\\]|\\\\.)*)\"([\\s\\S]*?)\"download_count\":\\s*(\\d+)",
-            Pattern.MULTILINE);
-    private static final Pattern GUTENDEX_AUTHOR_PATTERN = Pattern.compile(
-            "\"authors\":\\s*\\[\\s*\\{[^}]*\"name\":\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
-    private static final Pattern GUTENDEX_LANG_PATTERN = Pattern.compile(
-            "\"languages\":\\s*\\[\\s*\"([a-zA-Z\\-]+)\"");
+    private static final Pattern ARCHIVE_ID = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}");
 
     private final HttpClient httpClient;
     private final OpdsFeedParser opdsFeedParser;
@@ -81,7 +82,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
 
     @Override
     public void clearCompletedTasks() {
-        downloadTasks.removeIf(t -> t.getStatus() != DownloadTask.Status.DOWNLOADING);
+        downloadTasks.removeIf(DownloadTask::isFinished);
         notifyDownloadListeners();
     }
 
@@ -98,7 +99,8 @@ public class OnlineCatalogService implements IOnlineCatalogService {
             for (Runnable r : downloadListeners) {
                 try {
                     r.run();
-                } catch (Exception ignored) {
+                } catch (RuntimeException ex) {
+                    LOG.log(Level.WARNING, "Ошибка обработчика обновления загрузок", ex);
                 }
             }
         });
@@ -106,7 +108,14 @@ public class OnlineCatalogService implements IOnlineCatalogService {
 
     @Override
     public DownloadTask createTrackedTask(String title, String formatHint, String url) {
-        DownloadTask task = new DownloadTask(title, formatHint, url);
+        return track(new DownloadTask(title, formatHint, url));
+    }
+
+    public DownloadTask createLibraryDownload(String title, String formatHint, String url) {
+        return track(new DownloadTask(title, formatHint, url, true));
+    }
+
+    private DownloadTask track(DownloadTask task) {
         downloadTasks.add(0, task);
         notifyDownloadListeners();
         return task;
@@ -116,41 +125,63 @@ public class OnlineCatalogService implements IOnlineCatalogService {
     // ICatalogSearchService Implementation
     // ==========================================
 
+    public record SearchResult(List<OnlineBookItem> books, List<String> unavailableSources) {
+        public SearchResult {
+            books = List.copyOf(books);
+            unavailableSources = List.copyOf(unavailableSources);
+        }
+    }
+
     @Override
     public List<OnlineBookItem> searchBooks(String query, String sourceFilter, String languageFilter) {
-        String cleanQuery = (query == null) ? "" : query.trim();
-        List<CompletableFuture<List<OnlineBookItem>>> tasks = new ArrayList<>();
+        return searchBooksDetailed(query, sourceFilter, languageFilter).books();
+    }
 
+    public SearchResult searchBooksDetailed(String query, String sourceFilter, String languageFilter) {
+        String cleanQuery = query == null ? "" : query.trim();
+        Map<String, CompletableFuture<List<OnlineBookItem>>> tasks = new LinkedHashMap<>();
         boolean searchAll = "ALL".equalsIgnoreCase(sourceFilter);
 
         if (searchAll || "FLIBUSTA".equalsIgnoreCase(sourceFilter)) {
-            tasks.add(CompletableFuture.supplyAsync(() -> searchFlibustaOpds(cleanQuery)));
+            tasks.put("Флибуста", CompletableFuture.supplyAsync(() -> searchFlibustaOpds(cleanQuery)));
         }
         if (searchAll || "LIBRUSEC".equalsIgnoreCase(sourceFilter)) {
-            tasks.add(CompletableFuture.supplyAsync(() -> searchLibrusecOpds(cleanQuery)));
+            tasks.put("Либрусек", CompletableFuture.supplyAsync(() -> searchLibrusecOpds(cleanQuery)));
         }
         if (searchAll || "GUTENBERG".equalsIgnoreCase(sourceFilter)) {
-            tasks.add(CompletableFuture.supplyAsync(() -> searchGutendex(cleanQuery, languageFilter)));
+            tasks.put("Project Gutenberg", CompletableFuture.supplyAsync(() -> searchGutendex(cleanQuery, languageFilter)));
         }
         if (searchAll || "OPENLIBRARY".equalsIgnoreCase(sourceFilter)) {
-            tasks.add(CompletableFuture.supplyAsync(() -> searchOpenLibrary(cleanQuery)));
+            tasks.put("Open Library", CompletableFuture.supplyAsync(() -> searchOpenLibrary(cleanQuery)));
         }
         if ("STANDARD_EBOOKS".equalsIgnoreCase(sourceFilter)) {
-            tasks.add(CompletableFuture.supplyAsync(() ->
+            tasks.put("Standard Ebooks", CompletableFuture.supplyAsync(() ->
                     fetchOpdsFeed("https://standardebooks.org/opds/all?query=" + encodeUrl(cleanQuery), "Standard Ebooks")));
         }
 
-        List<OnlineBookItem> combined = new ArrayList<>();
-        for (CompletableFuture<List<OnlineBookItem>> future : tasks) {
+        return collectSearchResults(tasks);
+    }
+
+    static SearchResult collectSearchResults(Map<String, CompletableFuture<List<OnlineBookItem>>> tasks) {
+        List<OnlineBookItem> books = new ArrayList<>();
+        List<String> unavailable = new ArrayList<>();
+        var totalFailure = new IllegalStateException("Не удалось выполнить поиск в выбранных каталогах");
+        for (var source : tasks.entrySet()) {
             try {
-                List<OnlineBookItem> part = future.join();
-                if (part != null) {
-                    combined.addAll(part);
-                }
-            } catch (Exception ignored) {
+                books.addAll(source.getValue().get());
+            } catch (InterruptedException ex) {
+                tasks.values().forEach(task -> task.cancel(false));
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Поиск в каталогах отменён", ex);
+            } catch (ExecutionException ex) {
+                Throwable cause = ex.getCause();
+                LOG.log(Level.WARNING, "Не удалось выполнить поиск в каталоге " + source.getKey(), cause);
+                unavailable.add(source.getKey());
+                totalFailure.addSuppressed(cause);
             }
         }
-        return combined;
+        if (!tasks.isEmpty() && unavailable.size() == tasks.size()) throw totalFailure;
+        return new SearchResult(books, unavailable);
     }
 
     @Override
@@ -170,7 +201,6 @@ public class OnlineCatalogService implements IOnlineCatalogService {
 
     @Override
     public List<OnlineBookItem> fetchOpdsFeed(String feedUrl, String sourceLabel) {
-        List<OnlineBookItem> results = new ArrayList<>();
         try {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(feedUrl))
@@ -180,13 +210,17 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                     .GET()
                     .build();
 
-            HttpResponse<byte[]> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> resp = httpClient.send(req, CatalogResponseBody.bounded());
             if (resp.statusCode() >= 200 && resp.statusCode() < 300 && resp.body() != null) {
-                return opdsFeedParser.parse(resp.body(), feedUrl, sourceLabel);
+                return opdsFeedParser.parseStrict(resp.body(), feedUrl, sourceLabel);
             }
-        } catch (Exception ignored) {
+            throw new java.io.IOException("Каталог вернул HTTP " + resp.statusCode());
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Загрузка каталога прервана", ex);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось загрузить " + sourceLabel, ex);
         }
-        return results;
     }
 
     // ==========================================
@@ -198,6 +232,36 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                                  Path destinationDir, DoubleConsumer progressCallback) throws Exception {
         DownloadTask task = createTrackedTask(suggestedTitle, formatHint, downloadUrl);
         return bookDownloader.downloadBookFileWithTask(task, destinationDir, progressCallback);
+    }
+
+    public Book downloadAndImportBook(DownloadTask task, LibraryStorageService library,
+                                      DoubleConsumer progressCallback) throws Exception {
+        File file;
+        try {
+            file = downloadBookFileWithTask(task, library.getBooksDir(), progressCallback);
+        } catch (Exception ex) {
+            reportDownloadFailure(task, "Не удалось скачать файл", ex);
+            throw ex;
+        }
+
+        try {
+            Book imported = library.importBookFile(file, false);
+            task.setImportedBook(imported);
+            task.setStatus(DownloadTask.Status.COMPLETED);
+            notifyDownloadListeners();
+            return imported;
+        } catch (Exception ex) {
+            String message = "Файл скачан, но добавить его в библиотеку не удалось: " + file.getName();
+            reportDownloadFailure(task, message, ex);
+            throw new IllegalStateException(message, ex);
+        }
+    }
+
+    private void reportDownloadFailure(DownloadTask task, String message, Exception error) {
+        LOG.log(Level.WARNING, message, error);
+        task.setErrorMessage(message);
+        task.setStatus(DownloadTask.Status.FAILED);
+        notifyDownloadListeners();
     }
 
     @Override
@@ -220,15 +284,22 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                 "https://flibusta.club",
                 "http://flibusta.club"
         };
+        RuntimeException lastFailure = null;
+        boolean gotResponse = false;
         for (String base : mirrors) {
             String url = query.isEmpty()
                     ? (base + "/opds/new/0/new")
                     : (base + "/opds/search?searchTerm=" + encodeUrl(query) + "&searchType=books");
-            List<OnlineBookItem> items = fetchOpdsFeed(url, "Flibusta OPDS");
-            if (!items.isEmpty()) {
-                return items;
+            try {
+                List<OnlineBookItem> items = fetchOpdsFeed(url, "Flibusta OPDS");
+                gotResponse = true;
+                if (!items.isEmpty()) return items;
+            } catch (RuntimeException ex) {
+                lastFailure = ex;
+                if (Thread.currentThread().isInterrupted()) throw ex;
             }
         }
+        if (!gotResponse && lastFailure != null) throw lastFailure;
         return Collections.emptyList();
     }
 
@@ -237,15 +308,22 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                 "https://lib.rus.ec",
                 "http://lib.rus.ec"
         };
+        RuntimeException lastFailure = null;
+        boolean gotResponse = false;
         for (String base : bases) {
             String url = query.isEmpty()
                     ? (base + "/new/opds")
                     : (base + "/searchopds?ask=" + encodeUrl(query));
-            List<OnlineBookItem> items = fetchOpdsFeed(url, "Либрусек (lib.rus.ec)");
-            if (!items.isEmpty()) {
-                return items;
+            try {
+                List<OnlineBookItem> items = fetchOpdsFeed(url, "Либрусек (lib.rus.ec)");
+                gotResponse = true;
+                if (!items.isEmpty()) return items;
+            } catch (RuntimeException ex) {
+                lastFailure = ex;
+                if (Thread.currentThread().isInterrupted()) throw ex;
             }
         }
+        if (!gotResponse && lastFailure != null) throw lastFailure;
         return Collections.emptyList();
     }
 
@@ -267,51 +345,54 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                     .GET()
                     .build();
 
-            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (resp.statusCode() == 200 && resp.body() != null) {
-                parseGutendexJson(resp.body(), results);
-            }
-        } catch (Exception ignored) {
+            HttpResponse<byte[]> resp = httpClient.send(req, CatalogResponseBody.bounded());
+            if (resp.statusCode() != 200 || resp.body() == null) throw new java.io.IOException("HTTP " + resp.statusCode());
+            if (!(com.luminaread.util.Json.parse(new String(resp.body(), StandardCharsets.UTF_8)) instanceof java.util.Map<?, ?> root)
+                    || !(root.get("results") instanceof List<?> books)) throw new java.io.IOException("Некорректный ответ каталога");
+            results.addAll(parseGutendexBooks(books));
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Поиск Project Gutenberg прерван", ex);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Не удалось выполнить поиск Project Gutenberg", ex);
         }
         return results;
     }
 
-    private void parseGutendexJson(String json, List<OnlineBookItem> out) {
-        int resultsIdx = json.indexOf("\"results\"");
-        if (resultsIdx < 0) return;
-
-        Matcher m = GUTENDEX_ID_TITLE_PATTERN.matcher(json.substring(resultsIdx));
-        while (m.find()) {
-            String bookId = m.group(1);
-            String title = unescapeJson(m.group(2));
-            String bodySegment = m.group(3);
+    static List<OnlineBookItem> parseGutendexBooks(List<?> books) {
+        List<OnlineBookItem> results = new ArrayList<>();
+        for (Object value : books) {
+            if (!(value instanceof java.util.Map<?, ?> book)
+                    || !(book.get("id") instanceof Long id) || id <= 0
+                    || !(book.get("title") instanceof String title) || title.isBlank()) {
+                continue;
+            }
 
             String author = "Классическая литература";
-            Matcher authorMatcher = GUTENDEX_AUTHOR_PATTERN.matcher(bodySegment);
-            if (authorMatcher.find()) {
-                author = unescapeJson(authorMatcher.group(1));
+            if (book.get("authors") instanceof List<?> authors) {
+                for (Object entry : authors) {
+                    if (entry instanceof java.util.Map<?, ?> person
+                            && person.get("name") instanceof String name && !name.isBlank()) {
+                        author = name;
+                        break;
+                    }
+                }
+            }
+            String language = "en";
+            if (book.get("languages") instanceof List<?> languages
+                    && !languages.isEmpty() && languages.get(0) instanceof String code && !code.isBlank()) {
+                language = code;
             }
 
-            String lang = "en";
-            Matcher langMatcher = GUTENDEX_LANG_PATTERN.matcher(bodySegment);
-            if (langMatcher.find()) {
-                lang = langMatcher.group(1);
-            }
-
-            OnlineBookItem item = new OnlineBookItem(
-                    title,
-                    author,
-                    "Бесплатное издание из фонда Project Gutenberg (ID #" + bookId + "). Доступно в форматах EPUB, TXT и HTML.",
-                    lang,
-                    "Project Gutenberg"
-            );
-
-            item.addDownloadLink("EPUB", "https://www.gutenberg.org/ebooks/" + bookId + ".epub3.images");
-            item.addDownloadLink("TXT", "https://www.gutenberg.org/ebooks/" + bookId + ".txt.utf-8");
-            item.addDownloadLink("HTML", "https://www.gutenberg.org/ebooks/" + bookId + ".html.images");
-
-            out.add(item);
+            OnlineBookItem item = new OnlineBookItem(title, author,
+                    "Бесплатное издание Project Gutenberg", language, "Project Gutenberg");
+            String base = "https://www.gutenberg.org/ebooks/" + id;
+            item.addDownloadLink("EPUB", base + ".epub3.images");
+            item.addDownloadLink("TXT", base + ".txt.utf-8");
+            item.addDownloadLink("HTML", base + ".html.images");
+            results.add(item);
         }
+        return results;
     }
 
     private List<OnlineBookItem> searchOpenLibrary(String query) {
@@ -319,6 +400,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
             query = "classic literature";
         }
         List<OnlineBookItem> results = new ArrayList<>();
+        Exception firstFailure = null;
         try {
             String iaSearchUrl = "https://archive.org/advancedsearch.php?q=("
                     + encodeUrl(query)
@@ -332,11 +414,17 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                     .GET()
                     .build();
 
-            HttpResponse<String> iaResp = httpClient.send(iaReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (iaResp.statusCode() == 200 && iaResp.body() != null) {
-                parseArchiveOrgAdvancedJson(iaResp.body(), results);
-            }
-        } catch (Exception ignored) {
+            HttpResponse<byte[]> iaResp = httpClient.send(iaReq, CatalogResponseBody.bounded());
+            if (iaResp.statusCode() != 200 || iaResp.body() == null) throw new java.io.IOException("HTTP " + iaResp.statusCode());
+            if (!(com.luminaread.util.Json.parse(new String(iaResp.body(), StandardCharsets.UTF_8)) instanceof java.util.Map<?, ?> root)
+                    || !(root.get("response") instanceof java.util.Map<?, ?> response)
+                    || !(response.get("docs") instanceof List<?> docs)) throw new java.io.IOException("Некорректный ответ каталога");
+            results.addAll(parseArchiveBooks(docs, true));
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Поиск Internet Archive прерван", ex);
+        } catch (Exception ex) {
+            firstFailure = ex;
         }
 
         if (!results.isEmpty()) {
@@ -353,117 +441,57 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                     .GET()
                     .build();
 
-            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (resp.statusCode() == 200 && resp.body() != null) {
-                parseOpenLibraryJson(resp.body(), results);
-            }
-        } catch (Exception ignored) {
+            HttpResponse<byte[]> resp = httpClient.send(req, CatalogResponseBody.bounded());
+            if (resp.statusCode() != 200 || resp.body() == null) throw new java.io.IOException("HTTP " + resp.statusCode());
+            if (!(com.luminaread.util.Json.parse(new String(resp.body(), StandardCharsets.UTF_8)) instanceof java.util.Map<?, ?> root)
+                    || !(root.get("docs") instanceof List<?> docs)) throw new java.io.IOException("Некорректный ответ каталога");
+            results.addAll(parseArchiveBooks(docs, false));
+            if (firstFailure != null) LOG.log(Level.FINE, "Internet Archive недоступен; использован Open Library", firstFailure);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Поиск Open Library прерван", ex);
+        } catch (Exception ex) {
+            if (firstFailure != null) ex.addSuppressed(firstFailure);
+            throw new IllegalStateException("Не удалось выполнить поиск Open Library", ex);
         }
         return results;
     }
 
-    private void parseArchiveOrgAdvancedJson(String json, List<OnlineBookItem> out) {
-        int docsIdx = json.indexOf("\"docs\"");
-        if (docsIdx < 0) return;
+    static List<OnlineBookItem> parseArchiveBooks(List<?> docs, boolean fromInternetArchive) {
+        List<OnlineBookItem> books = new ArrayList<>();
+        for (Object value : docs) {
+            if (!(value instanceof Map<?, ?> document)) continue;
+            String title = firstText(document.get("title"));
+            String archiveId = firstText(document.get(fromInternetArchive ? "identifier" : "ia"));
+            if (title.isBlank() || !ARCHIVE_ID.matcher(archiveId).matches()) continue;
 
-        String[] rawObjects = json.substring(docsIdx).split("\\{\\s*\"");
-        for (int i = 1; i < rawObjects.length; i++) {
-            String obj = "{\"" + rawObjects[i];
-            String iaId = extractJsonString(obj, "identifier");
-            String title = extractJsonString(obj, "title");
-            if (iaId.isBlank() || title.isBlank()) continue;
+            String author = firstText(document.get(fromInternetArchive ? "creator" : "author_name"));
+            if (author.isBlank()) author = fromInternetArchive ? "Архив Internet Archive" : "Неизвестный автор";
+            String source = fromInternetArchive ? "Internet Archive (Open Access)" : "Open Library / Archive.org";
+            String summary = fromInternetArchive ? "Цифровое издание Internet Archive"
+                    : "Каталог Open Library / Internet Archive";
+            if (!fromInternetArchive && document.get("first_publish_year") instanceof Long year && year > 0) {
+                summary += " · " + year + " г.";
+            }
 
-            String author = extractJsonString(obj, "creator");
-            if (author.isBlank()) author = extractFirstJsonArrayString(obj, "creator");
-            if (author.isBlank()) author = "Архив Internet Archive";
-
-            OnlineBookItem item = new OnlineBookItem(
-                    title,
-                    author,
-                    "Свободный доступ в цифровом фонде Internet Archive (ID: " + iaId + ").",
-                    "ru/en",
-                    "Internet Archive (Open Access)"
-            );
-            item.addDownloadLink("EPUB", "https://archive.org/download/" + iaId + "/" + iaId + ".epub");
-            item.addDownloadLink("PDF", "https://archive.org/download/" + iaId + "/" + iaId + ".pdf");
-            item.addDownloadLink("TXT", "https://archive.org/download/" + iaId + "/" + iaId + "_djvu.txt");
-            out.add(item);
+            OnlineBookItem book = new OnlineBookItem(title, author, summary, "ru/en", source);
+            String base = "https://archive.org/download/" + archiveId + "/" + archiveId;
+            book.addDownloadLink("EPUB", base + ".epub");
+            book.addDownloadLink("PDF", base + ".pdf");
+            book.addDownloadLink("TXT", base + "_djvu.txt");
+            books.add(book);
         }
+        return books;
     }
 
-    private void parseOpenLibraryJson(String json, List<OnlineBookItem> out) {
-        int docsIdx = json.indexOf("\"docs\"");
-        if (docsIdx < 0) return;
-
-        String[] rawObjects = json.substring(docsIdx).split("\\{\\s*\"");
-        for (int i = 1; i < rawObjects.length; i++) {
-            String obj = "{\"" + rawObjects[i];
-            String title = extractJsonString(obj, "title");
-            if (title.isBlank()) continue;
-
-            String iaId = extractFirstJsonArrayString(obj, "ia");
-            if (iaId.isBlank()) continue;
-
-            String author = extractFirstJsonArrayString(obj, "author_name");
-            if (author.isBlank()) author = "Неизвестный автор";
-
-            String year = extractJsonNumber(obj, "first_publish_year");
-            String summary = "Каталог Open Library / Internet Archive"
-                    + (year.isEmpty() ? "." : " (год издания: " + year + ").");
-
-            OnlineBookItem item = new OnlineBookItem(title, author, summary, "ru/en", "Open Library / Archive.org");
-            item.addDownloadLink("EPUB", "https://archive.org/download/" + iaId + "/" + iaId + ".epub");
-            item.addDownloadLink("PDF", "https://archive.org/download/" + iaId + "/" + iaId + ".pdf");
-            item.addDownloadLink("TXT", "https://archive.org/download/" + iaId + "/" + iaId + "_djvu.txt");
-            out.add(item);
-        }
-    }
-
-    private String extractJsonString(String obj, String key) {
-        Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").matcher(obj);
-        return m.find() ? unescapeJson(m.group(1)) : "";
-    }
-
-    private String extractFirstJsonArrayString(String obj, String key) {
-        Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*\\[\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").matcher(obj);
-        return m.find() ? unescapeJson(m.group(1)) : "";
-    }
-
-    private String extractJsonNumber(String obj, String key) {
-        Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*(\\d+)").matcher(obj);
-        return m.find() ? m.group(1) : "";
-    }
-
-    private static String unescapeJson(String s) {
-        if (s == null) return "";
-        StringBuilder sb = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '\\' && i + 1 < s.length()) {
-                char next = s.charAt(++i);
-                switch (next) {
-                    case '"' -> sb.append('"');
-                    case '\\' -> sb.append('\\');
-                    case '/' -> sb.append('/');
-                    case 'n', 'r', 't' -> sb.append(' ');
-                    case 'u' -> {
-                        if (i + 4 < s.length()) {
-                            String hex = s.substring(i + 1, i + 5);
-                            try {
-                                sb.append((char) Integer.parseInt(hex, 16));
-                                i += 4;
-                            } catch (NumberFormatException e) {
-                                sb.append("\\u").append(hex);
-                            }
-                        }
-                    }
-                    default -> sb.append(next);
-                }
-            } else {
-                sb.append(c);
+    private static String firstText(Object value) {
+        if (value instanceof String text) return text;
+        if (value instanceof List<?> list) {
+            for (Object entry : list) {
+                if (entry instanceof String text && !text.isBlank()) return text;
             }
         }
-        return sb.toString().trim();
+        return "";
     }
 
     private static String encodeUrl(String s) {

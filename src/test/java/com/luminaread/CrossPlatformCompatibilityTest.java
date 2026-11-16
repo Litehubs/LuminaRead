@@ -122,10 +122,9 @@ public class CrossPlatformCompatibilityTest {
             String psScript = cmd.get(cmd.size() - 1);
             require(psScript.contains("System.Speech.Synthesis.SpeechSynthesizer"),
                     "PowerShell script must instantiate SpeechSynthesizer");
-            require(psScript.contains("''War & Peace''"),
-                    "Single quotes in text must be escaped by doubling (' -> '') for PowerShell");
-            require(psScript.contains("$100"),
-                    "Dollar sign ($) must be preserved verbatim in single-quoted PowerShell script");
+            require(!psScript.contains("War & Peace"), "Book text must not be embedded in the script");
+            require(sampleText.equals(pbWin.environment().get("LUMINAREAD_TTS_TEXT")),
+                    "Speech input must preserve quotes and dollar signs");
 
             // Verify via createProcessBuilder with simulated OS
             ProcessBuilder pbViaSim = TtsService.createProcessBuilder("Windows 11", sampleText, 180);

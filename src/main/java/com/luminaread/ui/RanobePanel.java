@@ -2,9 +2,6 @@ package com.luminaread.ui;
 
 import com.luminaread.parser.PaginationEngine;
 import com.luminaread.model.Chapter;
-import com.luminaread.service.LibAccountService;
-import com.luminaread.service.LibAccountService.LibBookmarkItem;
-import com.luminaread.service.LibAccountService.LibUser;
 import com.luminaread.service.YandexAuthService;
 import com.luminaread.service.YandexAuthService.YandexUser;
 import com.luminaread.service.RanobeService;
@@ -22,28 +19,24 @@ import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public class RanobePanel extends JPanel {
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger(RanobePanel.class.getName());
+    private static final com.luminaread.service.ranobe.RanobeCoverLoader COVER_LOADER =
+            new com.luminaread.service.ranobe.RanobeCoverLoader(com.luminaread.service.MediaCacheService.getInstance());
 
     public static final int MODE_SCROLL = 0;
     public static final int MODE_PAGED = 1;
 
     private final RanobeService ranobeService = new RanobeService();
-    private final LibAccountService accountService = LibAccountService.getInstance();
     private final YandexAuthService yandexService = YandexAuthService.getInstance();
     private final PanelWorkers workers = new PanelWorkers(4);
     private volatile boolean disposed;
     private final Consumer<YandexUser> yandexListener = user -> SwingUtilities.invokeLater(() -> {
-        if (!disposed) updateAuthButtonState();
-    });
-    private final Consumer<LibUser> libListener = user -> SwingUtilities.invokeLater(() -> {
         if (!disposed) updateAuthButtonState();
     });
     private final AtomicInteger loadToken = new AtomicInteger(0);
@@ -71,17 +64,18 @@ public class RanobePanel extends JPanel {
 
     private final JTextField searchField = new JTextField();
     private final JComboBox<String> categoryTabs = new JComboBox<>(new String[]{
-            "🔥 Популярное сейчас", "⭐ Избранное ранобэ", "🕒 История чтения", "🔖 Мои закладки RanobeLib"
+            "🔥 Популярное сейчас", "⭐ Избранное ранобэ", "🕒 История чтения"
     });
     private final SmoothScrollUtil.ResponsiveListPanel gridContainer = new SmoothScrollUtil.ResponsiveListPanel(new GridLayout(0, 2, 14, 14));
     private final JLabel statusLabel = new JLabel("Готово к поиску ранобэ и новелл");
-    private final JButton authBtn = new JButton("🔑 Вход в Lib.social");
+    private final JButton authBtn = new JButton("Войти через Яндекс ID");
 
     private RanobeItem currentRanobe;
     private final JLabel detailTitle = new JLabel();
     private final JLabel detailBadges = new JLabel();
     private final JTextArea detailDesc = new JTextArea();
     private final JLabel detailCover = new JLabel();
+    private final JLabel chapterStatus = new JLabel();
     private final JButton favToggleBtn = new JButton("☆ В избранное ранобэ");
     private final DefaultListModel<RanobeChapter> chapterListModel = new DefaultListModel<>();
     private final JList<RanobeChapter> chapterJList = new JList<>(chapterListModel);
@@ -129,7 +123,6 @@ public class RanobePanel extends JPanel {
         add(mainContainer, BorderLayout.CENTER);
 
         yandexService.addAuthListener(yandexListener);
-        accountService.addAuthListener(libListener);
         updateAuthButtonState();
 
         performSearch("");
@@ -139,7 +132,6 @@ public class RanobePanel extends JPanel {
         if (disposed) return;
         disposed = true;
         yandexService.removeAuthListener(yandexListener);
-        accountService.removeAuthListener(libListener);
         loadToken.incrementAndGet();
         workers.close();
         stopAutoScroll();
@@ -147,17 +139,15 @@ public class RanobePanel extends JPanel {
 
     private void loadPreferences() {
         ranobeService.loadRanobeState(favoriteRanobe, historyRanobe, lastReadChapterMap, readerPrefs);
-        try {
-            if (readerPrefs.containsKey("readingMode")) readingMode = Integer.parseInt(readerPrefs.get("readingMode"));
-            if (readerPrefs.containsKey("fontFamily")) fontFamily = readerPrefs.get("fontFamily");
-            if (readerPrefs.containsKey("fontSize")) fontSize = Math.max(12, Math.min(36, Integer.parseInt(readerPrefs.get("fontSize"))));
-            if (readerPrefs.containsKey("lineHeight")) lineHeight = Double.parseDouble(readerPrefs.get("lineHeight"));
-            if (readerPrefs.containsKey("textBlockWidth")) textBlockWidth = Math.max(500, Math.min(1600, Integer.parseInt(readerPrefs.get("textBlockWidth"))));
-            if (readerPrefs.containsKey("justifyText")) justifyText = Boolean.parseBoolean(readerPrefs.get("justifyText"));
-            if (readerPrefs.containsKey("themePresetId")) themePresetId = readerPrefs.get("themePresetId");
-            if (readerPrefs.containsKey("dimmerPercent")) dimmerOpacity = Math.max(0, Math.min(70, Integer.parseInt(readerPrefs.get("dimmerPercent")))) / 100.0;
-            if (readerPrefs.containsKey("autoScrollSpeed")) autoScrollSpeed = Math.max(10, Math.min(180, Integer.parseInt(readerPrefs.get("autoScrollSpeed"))));
-        } catch (Exception ignored) {}
+        readingMode = ReaderPreferenceValues.integer(readerPrefs, "readingMode", readingMode, MODE_SCROLL, MODE_PAGED);
+        fontFamily = readerPrefs.getOrDefault("fontFamily", fontFamily);
+        fontSize = ReaderPreferenceValues.integer(readerPrefs, "fontSize", fontSize, 12, 36);
+        lineHeight = ReaderPreferenceValues.finiteDouble(readerPrefs, "lineHeight", lineHeight);
+        textBlockWidth = ReaderPreferenceValues.integer(readerPrefs, "textBlockWidth", textBlockWidth, 500, 1600);
+        justifyText = ReaderPreferenceValues.bool(readerPrefs, "justifyText", justifyText);
+        themePresetId = readerPrefs.getOrDefault("themePresetId", themePresetId);
+        dimmerOpacity = ReaderPreferenceValues.integer(readerPrefs, "dimmerPercent", (int) (dimmerOpacity * 100), 0, 70) / 100.0;
+        autoScrollSpeed = ReaderPreferenceValues.integer(readerPrefs, "autoScrollSpeed", autoScrollSpeed, 10, 180);
     }
 
     private void savePreferences() {
@@ -170,20 +160,23 @@ public class RanobePanel extends JPanel {
         readerPrefs.put("themePresetId", themePresetId);
         readerPrefs.put("dimmerPercent", String.valueOf((int) Math.round(dimmerOpacity * 100)));
         readerPrefs.put("autoScrollSpeed", String.valueOf(autoScrollSpeed));
+        try {
+            persistListState();
+        } catch (java.io.UncheckedIOException | SecurityException ex) {
+            UiPersistenceErrors.show(this, "Не удалось сохранить настройки и прогресс ранобэ.", ex);
+        }
+    }
+
+    private void persistListState() {
         ranobeService.saveRanobeState(favoriteRanobe, historyRanobe, lastReadChapterMap, readerPrefs);
     }
 
     private void updateAuthButtonState() {
         YandexUser ya = yandexService.getCurrentUser();
-        LibUser lib = accountService.getCurrentUser();
         if (ya != null && ya.isAuthenticated()) {
             authBtn.setText("🟡 " + ya.getDisplayTitle());
             authBtn.setBackground(new Color(255, 214, 0));
             authBtn.setForeground(new Color(20, 20, 20));
-        } else if (lib != null && lib.isAuthenticated()) {
-            authBtn.setText("👤 " + lib.username);
-            authBtn.setBackground(new Color(46, 125, 50));
-            authBtn.setForeground(Color.WHITE);
         } else {
             authBtn.setText("🟡 Войти через Яндекс ID");
             authBtn.setBackground(new Color(55, 60, 75));
@@ -277,86 +270,7 @@ public class RanobePanel extends JPanel {
             renderRanobeItems(new ArrayList<>(favoriteRanobe.values()), "Избранное ранобэ (" + favoriteRanobe.size() + ")");
         } else if (idx == 2) {
             renderRanobeItems(new ArrayList<>(historyRanobe.values()), "История чтения (" + historyRanobe.size() + ")");
-        } else if (idx == 3) {
-            loadLibBookmarks();
         }
-    }
-
-    private void loadLibBookmarks() {
-        if (disposed) return;
-        YandexUser ya = yandexService.getCurrentUser();
-        LibUser lib = accountService.getCurrentUser();
-
-        if (!accountService.isLoggedIn() && ya != null && ya.isAuthenticated()) {
-            String candidate = !ya.linkedLibUsername.isEmpty() ? ya.linkedLibUsername : ya.login;
-            try {
-                accountService.loginWithProfile(candidate);
-            } catch (Exception ignored) {}
-        }
-
-        if (!accountService.isLoggedIn()) {
-            gridContainer.removeAll();
-            JPanel promptCard = new JPanel();
-            promptCard.setLayout(new BoxLayout(promptCard, BoxLayout.Y_AXIS));
-            promptCard.setOpaque(false);
-            promptCard.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-            JLabel msg = new JLabel(
-                    (ya != null && ya.isAuthenticated())
-                            ? "Вы вошли через Яндекс ID (" + ya.getDisplayTitle() + "). Укажите никнейм Lib.social для закладок:"
-                            : "Войдите через Яндекс ID или Lib.social для синхронизации закладок RanobeLib.",
-                    SwingConstants.CENTER
-            );
-            msg.setForeground(Color.LIGHT_GRAY);
-            msg.setFont(new Font("SansSerif", Font.BOLD, 14));
-            msg.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-            JButton loginBtn = new JButton("🟡 Войти через Яндекс ID / Lib.social");
-            loginBtn.setBackground(new Color(255, 214, 0));
-            loginBtn.setForeground(new Color(20, 20, 20));
-            loginBtn.setFont(new Font("SansSerif", Font.BOLD, 13));
-            loginBtn.setFocusPainted(false);
-            loginBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
-            loginBtn.addActionListener(e -> showAuthDialog());
-
-            promptCard.add(Box.createVerticalStrut(60));
-            promptCard.add(msg);
-            promptCard.add(Box.createVerticalStrut(14));
-            promptCard.add(loginBtn);
-
-            gridContainer.add(promptCard);
-            statusLabel.setText("Требуется авторизация для просмотра закладок");
-            gridContainer.revalidate();
-            gridContainer.repaint();
-            return;
-        }
-
-        statusLabel.setText("⏳ Загрузка закладок RanobeLib из профиля...");
-        workers.start(new SwingWorker<List<LibBookmarkItem>, Void>() {
-            @Override
-            protected List<LibBookmarkItem> doInBackground() {
-                return accountService.fetchUserBookmarks(3, 0);
-            }
-
-            @Override
-            protected void done() {
-                if (disposed) return;
-                try {
-                    List<LibBookmarkItem> bmarks = get();
-                    List<RanobeItem> items = new ArrayList<>();
-                    for (LibBookmarkItem b : bmarks) {
-                        items.add(new RanobeItem(
-                                b.slugUrl, b.title, b.rusTitle,
-                                "В закладках: " + b.getStatusName() + (b.lastReadChapter.isEmpty() ? "" : " • Читаете: Гл. " + b.lastReadChapter),
-                                b.coverUrl, b.getStatusName(), "★ Lib", "", Collections.emptyList(), Collections.emptyList()
-                        ));
-                    }
-                    renderRanobeItems(items, "Закладок RanobeLib в профиле: " + items.size());
-                } catch (Exception ex) {
-                    statusLabel.setText("Ошибка загрузки закладок: " + ex.getMessage());
-                }
-            }
-        });
     }
 
     private void performSearch(String query) {
@@ -465,6 +379,9 @@ public class RanobePanel extends JPanel {
     }
 
     private JPanel buildDetailsView() {
+        detailTitle.putClientProperty("html.disable", Boolean.TRUE);
+        detailBadges.putClientProperty("html.disable", Boolean.TRUE);
+        chapterStatus.setForeground(new Color(225, 170, 130));
         JPanel panel = new JPanel(new BorderLayout(16, 16));
         panel.setBackground(new Color(20, 22, 29));
         panel.setBorder(new EmptyBorder(18, 22, 18, 22));
@@ -588,7 +505,11 @@ public class RanobePanel extends JPanel {
 
         JPanel centerListPanel = new JPanel(new BorderLayout(0, 6));
         centerListPanel.setOpaque(false);
-        centerListPanel.add(chSearchRow, BorderLayout.NORTH);
+        JPanel chapterHeader = new JPanel(new BorderLayout(0, 6));
+        chapterHeader.setOpaque(false);
+        chapterHeader.add(chSearchRow, BorderLayout.NORTH);
+        chapterHeader.add(chapterStatus, BorderLayout.SOUTH);
+        centerListPanel.add(chapterHeader, BorderLayout.NORTH);
         centerListPanel.add(chScroll, BorderLayout.CENTER);
         body.add(centerListPanel, BorderLayout.CENTER);
         body.add(startReadBtn, BorderLayout.SOUTH);
@@ -612,6 +533,9 @@ public class RanobePanel extends JPanel {
         detailCover.setIcon(null);
         detailCover.setText("Загрузка...");
         chapterListModel.clear();
+        allChapters = Collections.emptyList();
+        filteredChapters = new ArrayList<>();
+        chapterStatus.setText("Загрузка глав...");
         viewLayout.show(mainContainer, "DETAILS");
 
         workers.execute(() -> {
@@ -638,7 +562,11 @@ public class RanobePanel extends JPanel {
                 try {
                     allChapters = get();
                     filterChapters("");
-                } catch (Exception ignored) {}
+                    chapterStatus.setText(allChapters.isEmpty() ? "Главы не найдены" : " ");
+                } catch (Exception ex) {
+                    LOG.log(java.util.logging.Level.WARNING, "Не удалось загрузить главы ранобэ", ex);
+                    chapterStatus.setText("Не удалось загрузить главы. Повторите попытку.");
+                }
             }
         });
 
@@ -659,7 +587,9 @@ public class RanobePanel extends JPanel {
                                 + (full.authors.isEmpty() ? "" : "\nАвтор: " + full.getAuthorsString()));
                         detailDesc.setCaretPosition(0);
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ex) {
+                    LOG.log(java.util.logging.Level.WARNING, "Не удалось загрузить описание ранобэ", ex);
+                }
             }
         });
     }
@@ -709,7 +639,7 @@ public class RanobePanel extends JPanel {
 
     private JScrollPane buildReaderScrollPane() {
         textEditorPane.setEditable(false);
-        textEditorPane.setContentType("text/html");
+        textEditorPane.setEditorKit(new ReaderHtmlKit());
         textEditorPane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
         if (textEditorPane.getCaret() instanceof DefaultCaret) {
             ((DefaultCaret) textEditorPane.getCaret()).setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
@@ -986,7 +916,7 @@ public class RanobePanel extends JPanel {
         autoScrollTimer.start();
     }
 
-    private void stopAutoScroll() {
+    void stopAutoScroll() {
         if (autoScrollTimer != null) {
             autoScrollTimer.stop();
             autoScrollTimer = null;
@@ -996,44 +926,40 @@ public class RanobePanel extends JPanel {
     }
 
     private void openChapterAtIndex(int idx) {
-        if (disposed) return;
-        if (filteredChapters == null || idx < 0 || idx >= filteredChapters.size()) return;
+        if (idx < 0 || idx >= filteredChapters.size()) return;
         currentChapterIndex = idx;
+        currentContent = null;
+        currentPages = Collections.emptyList();
         currentPageIndex = 0;
         final int token = loadToken.incrementAndGet();
 
         stopAutoScroll();
         currentChapter = filteredChapters.get(idx);
-        if (currentRanobe != null) {
-            lastReadChapterMap.put(currentRanobe.id, "Гл. " + currentChapter.number);
-            savePreferences();
-        }
+        final RanobeChapter requestedChapter = currentChapter;
+        final String requestedTitleId = currentRanobe != null ? currentRanobe.id : null;
 
         readerTitleLabel.setText(currentChapter.toString() + " — загрузка...");
         textEditorPane.setText("<html><body style='text-align:center; padding:50px; color:#aaa; font-family:sans-serif;'>"
-                + "<h2>⏳ Загрузка главы " + currentChapter.number + "...</h2></body></html>");
+                + "<h2>⏳ Загрузка главы " + com.luminaread.util.HtmlSanitizer.escapeHtml(requestedChapter.number) + "...</h2></body></html>");
         viewLayout.show(mainContainer, "READER");
 
-        workers.start(new SwingWorker<RanobeChapterContent, Void>() {
-            @Override
-            protected RanobeChapterContent doInBackground() throws Exception {
-                return ranobeService.fetchChapterContent(currentChapter, currentRanobe != null ? currentRanobe.id : null);
+        workers.submit(() -> token == loadToken.get(), () -> {
+            var loaded = ranobeService.fetchChapterContent(requestedChapter, requestedTitleId);
+            if (loaded == null) throw new IllegalStateException("Пустой ответ источника");
+            return loaded;
+        }, loaded -> {
+            currentContent = loaded;
+            if (requestedTitleId != null) {
+                lastReadChapterMap.put(requestedTitleId, "Гл. " + requestedChapter.number);
+                savePreferences();
             }
-
-            @Override
-            protected void done() {
-                if (disposed) return;
-                if (token != loadToken.get()) return;
-                try {
-                    currentContent = get();
-                    readerTitleLabel.setText(currentChapter.toString());
-                    renderChapterText();
-                } catch (Exception ex) {
-                    textEditorPane.setText("<html><body style='text-align:center; padding:50px; color:#ff8a65; font-family:sans-serif;'>"
-                            + "<h2>⚠️ Не удалось загрузить главу</h2><p>" + ex.getMessage() + "</p>"
-                            + "<p>Возможно, глава платная или доступна только на сайте.</p></body></html>");
-                }
-            }
+            readerTitleLabel.setText(requestedChapter.toString());
+            renderChapterText();
+        }, error -> {
+            LOG.log(java.util.logging.Level.WARNING, "Ошибка загрузки главы ранобэ", error);
+            textEditorPane.setText("<html><body style='text-align:center; padding:50px; color:#ff8a65; font-family:sans-serif;'>"
+                    + "<h2>⚠️ Не удалось загрузить главу</h2>"
+                    + "<p>Возможно, глава платная или доступна только на сайте.</p></body></html>");
         });
     }
 
@@ -1121,57 +1047,9 @@ public class RanobePanel extends JPanel {
     }
 
     private void setEditorHtmlContent(String bodyInnerHtml) {
-        HTMLEditorKit kit = new HTMLEditorKit();
-        StyleSheet styleSheet = kit.getStyleSheet();
-
-        Color bg = getThemeBackground();
-        Color fg = getThemeText();
-        Color acc = (currentTheme != null) ? currentTheme.getAccent() : new Color(129, 199, 132);
-        String bgHex = toHex(bg);
-        String textHex = toHex(fg);
-        String accHex = toHex(acc);
-        String alignCss = justifyText ? "justify" : "left";
-
-        int vpWidth = (readerScrollPane != null && readerScrollPane.getViewport().getWidth() > 0)
-                ? readerScrollPane.getViewport().getWidth()
-                : 900;
-        int hMargin = (vpWidth > textBlockWidth) ? Math.max(28, (vpWidth - textBlockWidth) / 2) : 28;
-
-        styleSheet.addRule("body { "
-                + "background-color: " + bgHex + "; "
-                + "color: " + textHex + "; "
-                + "font-family: '" + fontFamily + "', Georgia, serif; "
-                + "font-size: " + fontSize + "pt; "
-                + "line-height: " + lineHeight + "; "
-                + "text-align: " + alignCss + "; "
-                + "margin-top: 14px; "
-                + "margin-bottom: 30px; "
-                + "margin-left: " + hMargin + "px; "
-                + "margin-right: " + hMargin + "px; "
-                + "}");
-        styleSheet.addRule("body, p, div, span, li, blockquote, b, i, em, strong, font { color: " + textHex + "; }");
-        styleSheet.addRule("p { margin-top: 0px; margin-bottom: 14px; text-indent: 1.8em; text-align: " + alignCss + "; color: " + textHex + "; }");
-        styleSheet.addRule("h1, h2, h3, h4 { color: " + accHex + "; text-align: center; margin-top: 20px; margin-bottom: 14px; }");
-        styleSheet.addRule("blockquote { border-left: 3px solid " + accHex + "; margin-left: 14px; padding-left: 12px; font-style: italic; color: " + textHex + "; }");
-        styleSheet.addRule("img { max-width: 100%; height: auto; border-radius: 8px; margin: 12px 0; }");
-
-        textEditorPane.setEditorKit(kit);
-        textEditorPane.setBackground(bg);
-        textEditorPane.setForeground(fg);
-        textEditorPane.setCaretColor(fg);
-        textEditorPane.setFont(new Font(fontFamily, Font.PLAIN, fontSize));
-        readerScrollPane.getViewport().setBackground(bg);
-        readerScrollPane.setBackground(bg);
-
-        String cleanHtml = bodyInnerHtml != null ? bodyInnerHtml : "";
-        cleanHtml = cleanHtml.replaceAll("(?i)color\\s*:\\s*(#[0-9a-f]{3,6}|black|#[0-9a-f]{6}|rgba?\\([^)]+\\));?", "")
-                             .replaceAll("(?i)\\s*color\\s*=\\s*['\"]?(#[0-9a-f]{3,6}|black|#[0-9a-f]{6})['\"]?", "");
-
-        textEditorPane.setText("<html><body>" + cleanHtml + "</body></html>");
-        if (textEditorPane.getCaret() instanceof DefaultCaret) {
-            ((DefaultCaret) textEditorPane.getCaret()).setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
-        }
-        textEditorPane.setCaretPosition(0);
+        Color accent = currentTheme != null ? currentTheme.getAccent() : new Color(129, 199, 132);
+        RanobeReaderRenderer.render(textEditorPane, readerScrollPane, bodyInnerHtml, getThemeBackground(),
+                getThemeText(), accent, fontFamily, fontSize, lineHeight, textBlockWidth, justifyText);
     }
 
     private Color getThemeBackground() {
@@ -1341,25 +1219,8 @@ public class RanobePanel extends JPanel {
         });
     }
 
-    private static Image loadImageAwt(String urlStr) {
-        if (urlStr == null || urlStr.isEmpty()) return null;
-        try {
-            RanobeService.CachedImageInfo cached = RanobeService.cacheIllustration(urlStr);
-            if (cached != null && cached.localUrl != null && cached.localUrl.startsWith("file:")) {
-                return javax.imageio.ImageIO.read(new File(new URL(cached.localUrl).toURI()));
-            }
-            URL url = new URL(urlStr);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            conn.setRequestProperty("Referer", "https://ranobelib.me/");
-            conn.setConnectTimeout(8000);
-            conn.setReadTimeout(15000);
-            try (InputStream is = conn.getInputStream()) {
-                return javax.imageio.ImageIO.read(is);
-            }
-        } catch (Exception e) {
-            return null;
-        }
+    private static Image loadImageAwt(String url) {
+        return COVER_LOADER.load(url);
     }
 
     public void applyTheme(ThemePalette theme) {

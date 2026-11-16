@@ -77,10 +77,13 @@ public class PdfParser implements BookParser {
 
     private boolean extractWithPdfKit(File pdfFile, BookContent content) {
         Path tempOutput = null;
+        Path tempError = null;
+        Process process = null;
         try {
             Path cacheDir = pdfCacheDirectory(pdfFile);
             Files.createDirectories(cacheDir);
             tempOutput = Files.createTempFile("luminaread-pdf-text-", ".txt");
+            tempError = Files.createTempFile("luminaread-pdf-error-", ".log");
 
             String script = """
                     ObjC.import('Foundation');
@@ -91,6 +94,7 @@ public class PdfParser implements BookParser {
                     var outDir = ObjC.unwrap(args.objectAtIndex(6));
                     var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(pdfPath));
                     if (!doc) throw new Error('Cannot open PDF');
+                    var output = $.NSFileHandle.fileHandleWithStandardOutput;
                     for (var i = 0; i < doc.pageCount; i++) {
                         var page = doc.pageAtIndex(i);
                         var txt = page.string ? ObjC.unwrap(page.string) : '';
@@ -102,15 +106,17 @@ public class PdfParser implements BookParser {
                             var data = $.NSData.dataWithData(img.TIFFRepresentation);
                             data.writeToFileAtomically(outDir + '/page_' + (i + 1) + '.tiff', true);
                         }
-                        console.log('===LUMINA_PAGE_' + (i + 1) + '===\\n' + txt + '\\n');
+                        var pageText = '===LUMINA_PAGE_' + (i + 1) + '===\\n' + txt + '\\n';
+                        output.writeData($(pageText).dataUsingEncoding($.NSUTF8StringEncoding));
                     }
+                    '';
                     """;
 
             ProcessBuilder pb = new ProcessBuilder("/usr/bin/osascript", "-l", "JavaScript", "-e", script,
                     pdfFile.getAbsolutePath(), cacheDir.toAbsolutePath().toString());
-            pb.redirectErrorStream(true);
             pb.redirectOutput(tempOutput.toFile());
-            Process process = pb.start();
+            pb.redirectError(tempError.toFile());
+            process = pb.start();
             if (!process.waitFor(60, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
                 process.waitFor(2, TimeUnit.SECONDS);
@@ -130,15 +136,24 @@ public class PdfParser implements BookParser {
             }
             readPdfKitPages(tempOutput, cacheDir, content);
             return !content.getChapters().isEmpty();
-        } catch (Exception ignored) {
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(PdfParser.class.getName())
+                    .log(java.util.logging.Level.FINE, "PDFKit недоступен; пробуем другой способ чтения", ex);
             if (Boolean.getBoolean("luminaread.debugPdf")) {
-                ignored.printStackTrace(System.err);
+                ex.printStackTrace(System.err);
                 try { if (tempOutput != null) System.err.println("PDFKit output: " + Files.readString(tempOutput, StandardCharsets.UTF_8)); }
-                catch (Exception ignoredOutput) {}
+                catch (Exception outputError) {
+                    logPdfFallback("Не удалось прочитать диагностический вывод PDFKit", outputError);
+                }
             }
             return false;
         } finally {
-            try { if (tempOutput != null) Files.deleteIfExists(tempOutput); } catch (Exception ignored) {}
+            if (process != null && process.isAlive()) process.destroyForcibly();
+            deleteTemporaryFile(tempOutput);
+            deleteTemporaryFile(tempError);
         }
     }
 
@@ -147,14 +162,18 @@ public class PdfParser implements BookParser {
             for (Path tiff : files) {
                 Path png = tiff.resolveSibling(tiff.getFileName().toString().replaceFirst("\\.tiff$", ".png"));
                 try {
+                    if (com.luminaread.util.ImageSizeGuard.inspect(tiff.toFile())
+                            != com.luminaread.util.ImageSizeGuard.Result.ACCEPTABLE) continue;
                     BufferedImage image = ImageIO.read(tiff.toFile());
                     if (image != null) ImageIO.write(image, "png", png.toFile());
-                } catch (Exception ignored) {
+                } catch (Exception ex) {
+                    logPdfFallback("Не удалось преобразовать миниатюру PDF", ex);
                 } finally {
                     Files.deleteIfExists(tiff);
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            logPdfFallback("Не удалось обработать миниатюры PDF", ex);
         }
     }
 
@@ -250,13 +269,14 @@ public class PdfParser implements BookParser {
     private String extractWithPdfToText(File file) {
         Path tempOutput = null;
         Path tempError = null;
+        Process process = null;
         try {
             tempOutput = Files.createTempFile("luminaread-pdftotext-", ".txt");
             tempError = Files.createTempFile("luminaread-pdftotext-error-", ".log");
             ProcessBuilder pb = new ProcessBuilder("pdftotext", "-enc", "UTF-8", file.getAbsolutePath(), "-");
             pb.redirectOutput(tempOutput.toFile());
             pb.redirectError(tempError.toFile());
-            Process process = pb.start();
+            process = pb.start();
             if (!process.waitFor(30, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
                 process.waitFor(2, TimeUnit.SECONDS);
@@ -264,12 +284,29 @@ public class PdfParser implements BookParser {
             }
             if (process.exitValue() != 0 || Files.size(tempOutput) > MAX_EXTRACTED_TEXT_BYTES) return null;
             return Files.readString(tempOutput, StandardCharsets.UTF_8);
-        } catch (Exception ignored) {
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(PdfParser.class.getName())
+                    .log(java.util.logging.Level.FINE, "pdftotext недоступен; пробуем другой способ чтения", ex);
             return null;
         } finally {
-            try { if (tempOutput != null) Files.deleteIfExists(tempOutput); } catch (Exception ignored) {}
-            try { if (tempError != null) Files.deleteIfExists(tempError); } catch (Exception ignored) {}
+            if (process != null && process.isAlive()) process.destroyForcibly();
+            deleteTemporaryFile(tempOutput);
+            deleteTemporaryFile(tempError);
         }
+    }
+
+    private static void deleteTemporaryFile(Path path) {
+        if (path == null) return;
+        try { Files.deleteIfExists(path); }
+        catch (java.io.IOException ex) { logPdfFallback("Не удалось удалить временный файл PDF", ex); }
+    }
+
+    private static void logPdfFallback(String message, Throwable error) {
+        java.util.logging.Logger.getLogger(PdfParser.class.getName())
+                .log(java.util.logging.Level.FINE, message, error);
     }
 
     private void addTextPages(String[] pages, BookContent content) {

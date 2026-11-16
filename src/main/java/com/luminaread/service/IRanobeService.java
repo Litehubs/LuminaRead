@@ -3,6 +3,7 @@ package com.luminaread.service;
 import com.luminaread.model.ranobe.RanobeChapter;
 import com.luminaread.model.ranobe.RanobeChapterContent;
 import com.luminaread.model.ranobe.RanobeItem;
+import com.luminaread.model.ranobe.RanobeItemFactory;
 
 import java.util.List;
 import java.util.Map;
@@ -29,5 +30,6 @@ public interface IRanobeService {
     <T extends RanobeItem> void loadRanobeState(Map<String, T> favorites,
                                                 Map<String, T> history,
                                                 Map<String, String> lastReadChapters,
-                                                Map<String, String> preferences);
+                                                Map<String, String> preferences,
+                                                RanobeItemFactory<T> factory);
 }

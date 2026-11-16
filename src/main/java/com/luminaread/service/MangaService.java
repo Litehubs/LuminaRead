@@ -97,20 +97,47 @@ public class MangaService implements IMangaService {
 
     @Override
     public List<MangaItem> searchManga(String query, String sourceFilter) {
+        SearchResult result = searchMangaDetailed(query, sourceFilter);
+        if (!result.failedSources().isEmpty()) {
+            throw new IllegalStateException("Не удалось выполнить поиск: " + String.join(", ", result.failedSources()));
+        }
+        return result.items();
+    }
+
+    public record SearchResult(List<MangaItem> items, List<String> failedSources) {
+        public SearchResult {
+            items = List.copyOf(items);
+            failedSources = List.copyOf(failedSources);
+        }
+    }
+
+    public SearchResult searchMangaDetailed(String query, String sourceFilter) {
         List<MangaItem> results = new ArrayList<>();
+        List<String> failures = new ArrayList<>();
         String q = (query == null || query.trim().isEmpty()) ? "" : query.trim();
         boolean all = sourceFilter == null || "Все источники".equals(sourceFilter);
 
         if (all || sourceFilter.contains("MangaLib")) {
-            results.addAll(mangaLibClient.search(q));
+            searchSource("MangaLib", () -> mangaLibClient.search(q), results, failures);
         }
         if (all || sourceFilter.contains("Remanga")) {
-            results.addAll(remangaClient.search(q));
+            searchSource("Remanga", () -> remangaClient.search(q), results, failures);
         }
         if (all || sourceFilter.contains("MangaDex")) {
-            results.addAll(mangaDexClient.search(q));
+            searchSource("MangaDex", () -> mangaDexClient.search(q), results, failures);
         }
-        return results;
+        return new SearchResult(results, failures);
+    }
+
+    private static void searchSource(String name, java.util.function.Supplier<List<MangaItem>> request,
+                                     List<MangaItem> results, List<String> failures) {
+        try {
+            results.addAll(request.get());
+        } catch (RuntimeException ex) {
+            java.util.logging.Logger.getLogger(MangaService.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Ошибка поиска в " + name, ex);
+            failures.add(name);
+        }
     }
 
     @Override

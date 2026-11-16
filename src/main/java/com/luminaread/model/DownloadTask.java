@@ -5,7 +5,8 @@ import java.util.UUID;
 
 public class DownloadTask {
     public enum Status {
-        DOWNLOADING("Качается..."),
+        DOWNLOADING("Скачивание"),
+        IMPORTING("Импорт в библиотеку"),
         COMPLETED("Завершено (100%)"),
         FAILED("Ошибка загрузки");
 
@@ -18,6 +19,7 @@ public class DownloadTask {
     private final String title;
     private final String format;
     private final String url;
+    private final boolean importRequired;
 
     private volatile long bytesDownloaded;
     private volatile long totalBytes;
@@ -29,6 +31,11 @@ public class DownloadTask {
     private volatile Book importedBook;
 
     public DownloadTask(String title, String format, String url) {
+        this(title, format, url, false);
+    }
+
+    public DownloadTask(String title, String format, String url, boolean importRequired) {
+        this.importRequired = importRequired;
         this.id = UUID.randomUUID().toString();
         this.title = (title == null || title.isBlank()) ? "Книга из сети" : title.trim();
         this.format = (format == null || format.isBlank()) ? "АВТО" : format.toUpperCase();
@@ -63,6 +70,14 @@ public class DownloadTask {
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
 
+    public void finishTransfer(File file) {
+        setSavedFile(file);
+        setProgressPercent(100);
+        setStatus(importRequired ? Status.IMPORTING : Status.COMPLETED);
+    }
+
+    public boolean isFinished() { return status == Status.COMPLETED || status == Status.FAILED; }
+
     public File getSavedFile() { return savedFile; }
     public void setSavedFile(File savedFile) { this.savedFile = savedFile; }
 
@@ -72,8 +87,11 @@ public class DownloadTask {
     public String getFormattedProgressDetails() {
         String downloadedStr = formatBytes(bytesDownloaded);
         String totalStr = totalBytes > 0 ? formatBytes(totalBytes) : "неизвестно";
-        if (status == Status.COMPLETED) {
-            return String.format("100%%  •  Скачано: %s  •  Готово к чтению", downloadedStr);
+        if (status == Status.IMPORTING) {
+            return "Файл скачан · Импорт в библиотеку";
+        } else if (status == Status.COMPLETED) {
+            return String.format("100%%  •  Скачано: %s%s", downloadedStr,
+                    importedBook != null ? "  •  Готово к чтению" : "");
         } else if (status == Status.FAILED) {
             return "Ошибка: " + (errorMessage != null ? errorMessage : "не удалось скачать файл");
         }

@@ -188,7 +188,9 @@ public class RanobeArchitectureTest {
     private static void testRanobeServiceFacadeAndBackwardCompatibility() throws Exception {
         System.out.println("5. Verifying RanobeService facade & backward compatibility with callers...");
 
-        RanobeService service = new RanobeService();
+        java.nio.file.Path isolatedState = java.nio.file.Files.createTempDirectory("ranobe-architecture-").resolve("state.json");
+        RanobeService service = new RanobeService(null,
+                new com.luminaread.service.ranobe.RanobeStateRepository(isolatedState));
 
         // 1. Check inner class backward-compatible hierarchy
         RanobeService.RanobeItem legacyItem = new RanobeService.RanobeItem(
@@ -234,7 +236,7 @@ public class RanobeArchitectureTest {
         iService.saveRanobeState(legacyFavs, new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>());
 
         Map<String, RanobeService.RanobeItem> loadedFavs = new LinkedHashMap<>();
-        iService.loadRanobeState(loadedFavs, new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>());
+        iService.loadRanobeState(loadedFavs, new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>(), RanobeService.RanobeItem::new);
 
         System.out.println("   [PASS] RanobeService backward compatibility and polymorphic delegation confirmed.");
     }
