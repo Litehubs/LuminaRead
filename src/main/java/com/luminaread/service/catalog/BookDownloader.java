@@ -232,7 +232,6 @@ public class BookDownloader implements IBookDownloader {
 
     public void validateDownloadedBookFile(File file, String requestedFormat) throws Exception {
         if (file == null || !file.exists() || file.length() < 64) {
-            if (file != null) Files.deleteIfExists(file.toPath());
             throw new IllegalStateException("Скачанный файл пуст (0 КБ). Попробуйте другой формат или источник.");
         }
 
@@ -246,7 +245,6 @@ public class BookDownloader implements IBookDownloader {
                 if (looksLikeHtml && !requestedHtml) {
                     if (headText.contains("archive.org") || headText.contains("login") || headText.contains("borrow")
                             || headText.contains("404") || headText.contains("cloudflare")) {
-                        Files.deleteIfExists(file.toPath());
                         throw new IllegalStateException("Это издание защищено от прямого скачивания на сайте источника (требуется вход/аренда). Выберите другое издание в списке или формат PDF/TXT.");
                     }
                 }

@@ -34,6 +34,7 @@ class LibraryStorageSafetyTest {
         Files.writeString(file, "damaged library");
         assertThrows(IllegalStateException.class, () -> new LibraryStorageService(home));
         assertEquals("damaged library", Files.readString(file));
+        Files.delete(file);
     }
 
     @Test void rejectsUnexpectedSerializedTypeBeforeItsReadHookRuns() throws Exception {

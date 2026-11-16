@@ -37,7 +37,8 @@ jobs:
             Join-Path ([IO.Path]::GetTempPath()) ("luminaread-check-" + [Guid]::NewGuid())
           )
           try {
-            java "-Duser.home=$($profileDirectory.FullName)" -Djava.awt.headless=true -jar $artifact.FullName
+            $javaArgs = @("-Duser.home=$($profileDirectory.FullName)", "-Djava.awt.headless=true", "-jar", $artifact.FullName)
+            & java @javaArgs
             if ($LASTEXITCODE -ne 0) {
               throw "LuminaRead exited with status $LASTEXITCODE"
             }

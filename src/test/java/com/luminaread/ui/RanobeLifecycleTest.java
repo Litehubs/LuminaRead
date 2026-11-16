@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import javax.swing.SwingUtilities;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -13,14 +15,34 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class RanobeLifecycleTest {
     @Test void failedLoadsAreVisibleAndDoNotSaveProgress(@TempDir Path home) throws Exception {
+        runProbe(home, FailureProbe.class);
+    }
+
+    private void runProbe(Path home, Class<?> probe) throws Exception {
         String main = Path.of(RanobePanel.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
         String tests = Path.of(getClass().getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
+        Path log = home.resolve("probe.log");
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                "-Djava.awt.headless=true", "-Duser.home=" + home, "-cp", main + File.pathSeparator + tests,
-                FailureProbe.class.getName()).redirectErrorStream(true).start();
-        try { assertTrue(process.waitFor(20, TimeUnit.SECONDS)); assertEquals(0, process.exitValue(), new String(process.getInputStream().readAllBytes())); }
-        finally { process.destroyForcibly(); }
+                "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-Duser.home=" + home,
+                "-cp", main + File.pathSeparator + tests, probe.getName())
+                .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+        try {
+            assertTrue(process.waitFor(20, TimeUnit.SECONDS), () -> "Ranobe probe timed out: " + readLog(log));
+            assertEquals(0, process.exitValue(), () -> readLog(log));
+        } finally {
+            process.destroyForcibly();
+            process.waitFor(5, TimeUnit.SECONDS);
+        }
     }
+
+    private static String readLog(Path log) {
+        try {
+            return Files.readString(log, StandardCharsets.UTF_8);
+        } catch (java.io.IOException ex) {
+            return ex.toString();
+        }
+    }
+
     public static class FailureProbe {
         public static void main(String[] args) throws Exception {
             RanobePanel[] panel = new RanobePanel[1];
@@ -108,14 +130,9 @@ final class RanobeLifecycleTest {
         }
     }
     @Test void closingPanelCancelsSearch(@TempDir Path home) throws Exception {
-        String main = Path.of(RanobePanel.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        String tests = Path.of(getClass().getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                "-Djava.awt.headless=true", "-Duser.home=" + home, "-cp", main + File.pathSeparator + tests,
-                Probe.class.getName()).redirectErrorStream(true).start();
-        try { assertTrue(process.waitFor(20, TimeUnit.SECONDS)); assertEquals(0, process.exitValue(), new String(process.getInputStream().readAllBytes())); }
-        finally { process.destroyForcibly(); }
+        runProbe(home, Probe.class);
     }
+
     public static class Probe {
         public static void main(String[] args) throws Exception {
             CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1), interrupted = new CountDownLatch(1);

@@ -16,7 +16,6 @@ import com.luminaread.util.HtmlSanitizer;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.ObjectInputFilter;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
@@ -109,8 +108,8 @@ public class LibraryStorageService {
 
     public synchronized void loadState() {
         if (Files.exists(stateFile)) {
-            try (ObjectInputStream ois = new ObjectInputStream(
-                    new BufferedInputStream(new FileInputStream(stateFile.toFile()), 32768))) {
+            try (var input = new BufferedInputStream(Files.newInputStream(stateFile), 32768);
+                 var ois = new ObjectInputStream(input)) {
                 if (Files.size(stateFile) > MAX_STATE_BYTES) throw new IOException("Файл библиотеки слишком большой");
                 ObjectInputFilter filter = LibraryStorageService::filterState;
                 ObjectInputFilter existing = ois.getObjectInputFilter();
