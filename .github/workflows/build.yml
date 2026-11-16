@@ -1,0 +1,50 @@
+name: Build LuminaRead
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Java 17 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Compile, test and package
+        run: mvn --batch-mode --no-transfer-progress clean verify
+      - name: Launch the packaged JAR with a temporary library
+        shell: pwsh
+        run: |
+          $artifact = Get-Item target/LuminaRead-2.0.0.jar
+          $profileDirectory = New-Item -ItemType Directory -Path (
+            Join-Path ([IO.Path]::GetTempPath()) ("luminaread-check-" + [Guid]::NewGuid())
+          )
+          try {
+            java "-Duser.home=$($profileDirectory.FullName)" -Djava.awt.headless=true -jar $artifact.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "LuminaRead exited with status $LASTEXITCODE"
+            }
+            $books = @(Get-ChildItem (Join-Path $profileDirectory.FullName 'LuminaRead_Books') -Filter '*.fb2')
+            if ($books.Count -eq 0) {
+              throw 'The packaged application did not initialize the sample library'
+            }
+          } finally {
+            Remove-Item -LiteralPath $profileDirectory.FullName -Recurse -Force
+          }
