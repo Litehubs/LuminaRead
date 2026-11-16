@@ -49,3 +49,12 @@ jobs:
           } finally {
             Remove-Item -LiteralPath $profileDirectory.FullName -Recurse -Force
           }
+      - name: Upload the tested desktop JAR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: LuminaRead
+          path: target/LuminaRead-2.0.0.jar
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
