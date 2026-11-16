@@ -13,7 +13,7 @@ class MotionCardPanelTest {
     @Test
     void switchesImmediatelyAndDropsOldFramesWhenMotionIsDisabled() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
-            MotionCardPanel deck = new MotionCardPanel();
+            MotionCardPanel deck = new MotionCardPanel("book");
             JPanel library = card(Color.RED);
             JPanel book = card(Color.GREEN);
             JPanel catalog = card(Color.BLUE);

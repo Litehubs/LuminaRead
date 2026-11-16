@@ -43,7 +43,7 @@ public class RanobePanel extends JPanel {
     private final LatestRequest detailRequests = new LatestRequest();
     private final Consumer<Boolean> onToggleSidebar;
 
-    private final MotionCardPanel mainContainer = new MotionCardPanel();
+    private final MotionCardPanel mainContainer = new MotionCardPanel("READER");
 
     private final Map<String, RanobeItem> favoriteRanobe = new LinkedHashMap<>();
     private final Map<String, RanobeItem> historyRanobe = new LinkedHashMap<>();
@@ -132,6 +132,14 @@ public class RanobePanel extends JPanel {
         updateAuthButtonState();
 
         if (initialSearch) performSearch("");
+    }
+
+    void useTransitionSurface(MotionSurface surface) {
+        mainContainer.useTransitionSurface(surface);
+    }
+
+    private void showSidebar() {
+        if (onToggleSidebar != null) onToggleSidebar.accept(true);
     }
 
     void setAnimationsEnabled(boolean enabled) {
@@ -305,8 +313,7 @@ public class RanobePanel extends JPanel {
         backBtn.addActionListener(e -> {
             detailRequests.invalidate();
             loadToken.incrementAndGet();
-            if (onToggleSidebar != null) onToggleSidebar.accept(true);
-            mainContainer.showCard("EXPLORE");
+            mainContainer.showCard("EXPLORE", this::showSidebar);
         });
 
         favToggleBtn.setFocusPainted(false);
@@ -516,8 +523,7 @@ public class RanobePanel extends JPanel {
         backBtn.addActionListener(e -> {
             stopAutoScroll();
             loadToken.incrementAndGet();
-            if (onToggleSidebar != null) onToggleSidebar.accept(true);
-            mainContainer.showCard("DETAILS");
+            mainContainer.showCard("DETAILS", this::showSidebar);
         });
 
         textSettingsBtn.setFont(new Font("SansSerif", Font.BOLD, 12));
