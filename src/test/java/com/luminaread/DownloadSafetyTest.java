@@ -36,6 +36,14 @@ public final class DownloadSafetyTest {
                     .downloadBookFile("http://example.com/book.txt", "book", "TXT", dir, null).toPath();
             if (!Files.readString(existing).equals("existing book") || !Files.readString(saved).equals(newBook) || saved.equals(existing))
                 throw new AssertionError("Successful download must preserve existing book and save new content separately");
+            BookDownloader downloader = new BookDownloader(new FakeClient(newBook), null);
+            verifyFilename(downloader, dir, "CON", "_CON.txt", newBook);
+            verifyFilename(downloader, dir, "nul.backup", "_nul.backup.txt", newBook);
+            verifyFilename(downloader, dir, "COM¹", "_COM¹.txt", newBook);
+            verifyFilename(downloader, dir, "A" + (char) 0 + ":B", "A__B.txt", newBook);
+            verifyFilename(downloader, dir, "Книга. ", "Книга.txt", newBook);
+            String prefix = "a".repeat(79);
+            verifyFilename(downloader, dir, prefix + "📚", prefix + ".txt", newBook);
             try (var files = Files.list(dir)) {
                 if (files.anyMatch(path -> path.getFileName().toString().startsWith(".luminaread-download-")))
                     throw new AssertionError("Temporary downloads must be cleaned up");
@@ -46,6 +54,14 @@ public final class DownloadSafetyTest {
         }
         System.out.println("PASS download safety");
     }
+    private static void verifyFilename(BookDownloader downloader, Path directory, String title,
+                                       String expectedName, String content) throws Exception {
+        Path file = downloader.downloadBookFile("http://example.com/book.txt", title, "TXT", directory, null).toPath();
+        if (!file.getFileName().toString().equals(expectedName) || !Files.readString(file).equals(content)) {
+            throw new AssertionError("Expected the book to be saved as " + expectedName);
+        }
+    }
+
     static final class FakeClient extends HttpClient {
         private final byte[] content;
         boolean bodyClosed;
