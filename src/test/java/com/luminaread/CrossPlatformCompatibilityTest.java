@@ -3,7 +3,7 @@ package com.luminaread;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.MediaCacheService;
 import com.luminaread.service.TtsService;
-import com.luminaread.service.YandexAuthService;
+import com.luminaread.util.SystemBrowser;
 import com.luminaread.ui.MainWindow;
 import com.luminaread.ui.ModernUiFactory;
 
@@ -277,19 +277,12 @@ public class CrossPlatformCompatibilityTest {
             throw new AssertionError("Taskbar setSafeTaskbarIcon must never throw unhandled exception: " + t.getMessage(), t);
         }
 
-        // 3. Desktop safe browse call must never throw
+        // Invalid browser targets must fail without launching a real browser.
         try {
-            YandexAuthService.safeBrowse("https://example.com");
-        } catch (Throwable t) {
-            throw new AssertionError("safeBrowse must never throw unhandled exception: " + t.getMessage(), t);
-        }
-
-        // 4. YandexAuthService instance call must never throw
-        try {
-            YandexAuthService authService = YandexAuthService.getInstance();
-            authService.openYandexOAuthInBrowser();
-        } catch (Throwable t) {
-            throw new AssertionError("openYandexOAuthInBrowser must never throw unhandled exception: " + t.getMessage(), t);
+            SystemBrowser.open(java.net.URI.create("http://example.com"));
+            throw new AssertionError("Non-HTTPS browser launch should report an error");
+        } catch (java.io.IOException expected) {
+            require(expected.getMessage().contains("браузер"), "Expected a browser error");
         }
     }
 }

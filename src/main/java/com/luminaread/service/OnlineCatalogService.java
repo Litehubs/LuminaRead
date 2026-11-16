@@ -4,7 +4,7 @@ import com.luminaread.model.Book;
 import com.luminaread.model.DownloadTask;
 import com.luminaread.model.OnlineBookItem;
 import com.luminaread.service.catalog.BookDownloader;
-import com.luminaread.service.catalog.CatalogResponseBody;
+import com.luminaread.util.BoundedHttpBody;
 import com.luminaread.service.catalog.IBookDownloader;
 import com.luminaread.service.catalog.OpdsFeedParser;
 
@@ -42,6 +42,9 @@ public class OnlineCatalogService implements IOnlineCatalogService {
     private static final Logger LOG = Logger.getLogger(OnlineCatalogService.class.getName());
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) LuminaRead/2.2";
+
+    private static final HttpResponse.BodyHandler<byte[]> FEED_BODY =
+            BoundedHttpBody.bounded(4 * 1024 * 1024, "Ответ каталога превышает допустимый размер.");
 
     private static final Pattern ARCHIVE_ID = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}");
 
@@ -218,7 +221,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                     .GET()
                     .build();
 
-            HttpResponse<byte[]> resp = httpClient.send(req, CatalogResponseBody.bounded());
+            HttpResponse<byte[]> resp = httpClient.send(req, FEED_BODY);
             if (resp.statusCode() >= 200 && resp.statusCode() < 300 && resp.body() != null) {
                 return opdsFeedParser.parseStrict(resp.body(), feedUrl, sourceLabel);
             }
@@ -353,7 +356,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                     .GET()
                     .build();
 
-            HttpResponse<byte[]> resp = httpClient.send(req, CatalogResponseBody.bounded());
+            HttpResponse<byte[]> resp = httpClient.send(req, FEED_BODY);
             if (resp.statusCode() != 200 || resp.body() == null) throw new java.io.IOException("HTTP " + resp.statusCode());
             if (!(com.luminaread.util.Json.parse(new String(resp.body(), StandardCharsets.UTF_8)) instanceof java.util.Map<?, ?> root)
                     || !(root.get("results") instanceof List<?> books)) throw new java.io.IOException("Некорректный ответ каталога");
@@ -422,7 +425,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                     .GET()
                     .build();
 
-            HttpResponse<byte[]> iaResp = httpClient.send(iaReq, CatalogResponseBody.bounded());
+            HttpResponse<byte[]> iaResp = httpClient.send(iaReq, FEED_BODY);
             if (iaResp.statusCode() != 200 || iaResp.body() == null) throw new java.io.IOException("HTTP " + iaResp.statusCode());
             if (!(com.luminaread.util.Json.parse(new String(iaResp.body(), StandardCharsets.UTF_8)) instanceof java.util.Map<?, ?> root)
                     || !(root.get("response") instanceof java.util.Map<?, ?> response)
@@ -449,7 +452,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                     .GET()
                     .build();
 
-            HttpResponse<byte[]> resp = httpClient.send(req, CatalogResponseBody.bounded());
+            HttpResponse<byte[]> resp = httpClient.send(req, FEED_BODY);
             if (resp.statusCode() != 200 || resp.body() == null) throw new java.io.IOException("HTTP " + resp.statusCode());
             if (!(com.luminaread.util.Json.parse(new String(resp.body(), StandardCharsets.UTF_8)) instanceof java.util.Map<?, ?> root)
                     || !(root.get("docs") instanceof List<?> docs)) throw new java.io.IOException("Некорректный ответ каталога");

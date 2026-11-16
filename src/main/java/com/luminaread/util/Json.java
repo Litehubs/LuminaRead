@@ -21,6 +21,38 @@ public final class Json {
         return value;
     }
 
+    public static String writeStringObject(Map<String, String> fields) {
+        var result = new StringBuilder("{");
+        fields.forEach((key, value) -> {
+            if (result.length() > 1) result.append(',');
+            appendQuoted(result, key);
+            result.append(':');
+            appendQuoted(result, value);
+        });
+        return result.append('}').toString();
+    }
+
+    private static void appendQuoted(StringBuilder output, String value) {
+        output.append('"');
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"', '\\' -> output.append('\\').append(c);
+                default -> {
+                    if (c < 0x20 || Character.isSurrogate(c)) {
+                        output.append("\\u");
+                        for (int shift = 12; shift >= 0; shift -= 4) {
+                            output.append(Character.forDigit((c >>> shift) & 0xf, 16));
+                        }
+                    } else {
+                        output.append(c);
+                    }
+                }
+            }
+        }
+        output.append('"');
+    }
+
     private IllegalArgumentException invalid() {
         return new IllegalArgumentException("Invalid JSON at position " + i);
     }

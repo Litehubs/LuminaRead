@@ -34,15 +34,12 @@ public final class YandexPkce {
 
     public String verifier() { return verifier; }
 
-    public URI authorizationUri() {
-        return authorizationUri(URI.create("https://oauth.yandex.ru/verification_code"), null);
-    }
-
     public URI authorizationUri(URI redirect, String state) {
+        if (state == null || state.isBlank()) throw new IllegalArgumentException("Требуется состояние OAuth.");
         return URI.create("https://oauth.yandex.ru/authorize?response_type=code&client_id=" + encode(clientId)
                 + "&redirect_uri=" + encode(redirect.toString())
                 + "&code_challenge=" + encode(challenge) + "&code_challenge_method=S256"
-                + (state == null ? "" : "&state=" + encode(state)));
+                + "&state=" + encode(state));
     }
 
     private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }

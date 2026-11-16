@@ -7,7 +7,6 @@ import com.luminaread.model.ranobe.RanobeItem;
 import com.luminaread.parser.PaginationEngine;
 import com.luminaread.service.IRanobeService;
 import com.luminaread.service.MediaCacheService;
-import com.luminaread.service.YandexAuthService.YandexUser;
 import com.luminaread.service.YandexAuthService;
 import com.luminaread.service.ranobe.RanobeCoverLoader;
 import com.luminaread.util.LatestRequest;
@@ -36,7 +35,7 @@ public class RanobePanel extends JPanel {
     private final AtomicInteger loadToken = new AtomicInteger(0);
     private final PanelWorkers workers = new PanelWorkers(4);
     private volatile boolean disposed;
-    private final Consumer<YandexUser> authListener = user -> SwingUtilities.invokeLater(() -> {
+    private final Runnable authListener = () -> SwingUtilities.invokeLater(() -> {
         if (!disposed) updateAuthButtonState();
     });
     private final LatestRequest searchRequests = new LatestRequest();
@@ -203,13 +202,14 @@ public class RanobePanel extends JPanel {
     }
 
     private void updateAuthButtonState() {
-        YandexUser ya = yandexService.getCurrentUser();
-        if (ya != null && ya.isAuthenticated()) {
-            authBtn.setText("🟡 " + ya.getDisplayTitle());
+        var account = yandexService.account();
+        if (account.status() == YandexAuthService.Status.VERIFIED) {
+            authBtn.setText("🟡 " + account.description());
             authBtn.setBackground(new Color(255, 214, 0));
             authBtn.setForeground(new Color(20, 20, 20));
         } else {
-            authBtn.setText("🟡 Войти через Яндекс ID");
+            authBtn.setText(account.status() == YandexAuthService.Status.SAVED_PROFILE
+                    ? "🟡 Подтвердить вход" : "🟡 Войти через Яндекс ID");
             authBtn.setBackground(new Color(55, 60, 75));
             authBtn.setForeground(new Color(230, 235, 245));
         }
@@ -882,10 +882,7 @@ public class RanobePanel extends JPanel {
     }
 
     public void showAuthDialog() {
-        AuthDialog.show(this, currentTheme, () -> {
-            updateAuthButtonState();
-            onCategoryChanged();
-        });
+        AuthDialog.show(this, currentTheme);
     }
 
     public void applyTheme(ThemePalette theme) {

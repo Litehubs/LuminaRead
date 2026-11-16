@@ -7,7 +7,6 @@ import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
 import com.luminaread.service.TtsService;
 import com.luminaread.service.YandexAuthService;
-import com.luminaread.service.YandexAuthService.YandexUser;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -20,6 +19,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSlider;
+import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -42,6 +42,9 @@ public class SettingsPanel extends JPanel {
     private final JScrollPane mainScroll;
     private final JPanel themeButtonsGrid;
     private final DownloadsSection downloads;
+    private final YandexAuthService yandex = YandexAuthService.getInstance();
+    private final JLabel accountLabel = new JLabel();
+    private final Runnable authListener = () -> SwingUtilities.invokeLater(this::updateAccountLabel);
 
     private ThemePalette currentTheme;
 
@@ -82,6 +85,7 @@ public class SettingsPanel extends JPanel {
         add(mainScroll, BorderLayout.CENTER);
 
         applyTheme(currentTheme);
+        yandex.addAuthListener(authListener);
     }
 
     private void buildFullSettingsSections() {
@@ -373,25 +377,18 @@ public class SettingsPanel extends JPanel {
         mainContainer.add(Box.createVerticalStrut(16));
         JPanel accountsSection = createSectionCard("Аккаунт Яндекс ID");
 
-        YandexAuthService yaService = YandexAuthService.getInstance();
-
         JPanel accountInfoRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 14, 6));
         accountInfoRow.setOpaque(false);
         accountInfoRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        YandexUser ya = yaService.getCurrentUser();
-        String yaStatus = (ya != null && ya.isAuthenticated()) ? ("🟡 " + ya.getDisplayTitle()) : "🟡 Не подключён";
-        JLabel yaLbl = new JLabel("Яндекс ID: " + yaStatus);
-        yaLbl.setFont(ModernUiFactory.uiFont(Font.BOLD, 13));
-        yaLbl.setForeground(currentTheme.getTextPrimary());
+        updateAccountLabel();
+        accountLabel.setFont(ModernUiFactory.uiFont(Font.BOLD, 13));
+        accountLabel.setForeground(currentTheme.getTextPrimary());
 
         JButton manageAuthBtn = ModernUiFactory.createPrimaryButton("Управление аккаунтом", currentTheme);
-        manageAuthBtn.addActionListener(e -> AuthDialog.show(this, currentTheme, () -> {
-            YandexUser y = yaService.getCurrentUser();
-            yaLbl.setText("Яндекс ID: " + ((y != null && y.isAuthenticated()) ? ("🟡 " + y.getDisplayTitle()) : "🟡 Не подключён"));
-        }));
+        manageAuthBtn.addActionListener(e -> AuthDialog.show(this, currentTheme));
 
-        accountInfoRow.add(yaLbl);
+        accountInfoRow.add(accountLabel);
         accountInfoRow.add(manageAuthBtn);
 
         accountsSection.add(accountInfoRow);
@@ -424,7 +421,12 @@ public class SettingsPanel extends JPanel {
         downloads.refresh();
     }
 
+    private void updateAccountLabel() {
+        accountLabel.setText("Яндекс ID: " + yandex.account().description());
+    }
+
     void disposeResources() {
+        yandex.removeAuthListener(authListener);
         downloads.disposeResources();
     }
 
