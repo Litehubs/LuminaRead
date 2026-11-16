@@ -29,7 +29,7 @@ import java.util.function.BiConsumer;
 
 public class StatsAndNotesPanel extends JPanel {
     private final LibraryStorageService storageService;
-    private final BiConsumer<String, Integer> onJumpToBookChapter;
+    private final BiConsumer<String, ReadingPosition> onJumpToBookPosition;
 
     private final JPanel metricsGrid;
     private final JPanel bookmarksListPanel;
@@ -39,9 +39,9 @@ public class StatsAndNotesPanel extends JPanel {
     private ThemePalette currentTheme;
 
     public StatsAndNotesPanel(LibraryStorageService storageService,
-                              BiConsumer<String, Integer> onJumpToBookChapter) {
+                              BiConsumer<String, ReadingPosition> onJumpToBookPosition) {
         this.storageService = storageService;
-        this.onJumpToBookChapter = onJumpToBookChapter;
+        this.onJumpToBookPosition = onJumpToBookPosition;
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());
 
         setLayout(new BorderLayout(0, 12));
@@ -194,7 +194,8 @@ public class StatsAndNotesPanel extends JPanel {
         btns.setOpaque(false);
 
         JButton goBtn = ModernUiFactory.createFlatButton("Перейти", currentTheme);
-        goBtn.addActionListener(e -> onJumpToBookChapter.accept(bm.getBookId(), bm.getChapterIndex()));
+        goBtn.addActionListener(e -> onJumpToBookPosition.accept(bm.getBookId(),
+                new ReadingPosition(bm.getChapterIndex(), bm.getPageIndex(), bm.getScrollOffset())));
 
         JButton delBtn = ModernUiFactory.createFlatButton("Удалить", currentTheme);
         delBtn.addActionListener(e -> {
@@ -231,7 +232,8 @@ public class StatsAndNotesPanel extends JPanel {
         btns.setOpaque(false);
 
         JButton goBtn = ModernUiFactory.createFlatButton("Открыть", currentTheme);
-        goBtn.addActionListener(e -> onJumpToBookChapter.accept(hl.getBookId(), hl.getChapterIndex()));
+        goBtn.addActionListener(e -> onJumpToBookPosition.accept(hl.getBookId(),
+                new ReadingPosition(hl.getChapterIndex(), 0, 0)));
 
         JButton delBtn = ModernUiFactory.createFlatButton("Удалить", currentTheme);
         delBtn.addActionListener(e -> {

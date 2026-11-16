@@ -120,18 +120,7 @@ public class MainWindow extends JFrame {
                 }
         );
 
-        statsAndNotesPanel = new StatsAndNotesPanel(
-                storageService,
-                (bookId, chapterIndex) -> {
-                    for (Book b : storageService.getAllBooks()) {
-                        if (b.getId().equals(bookId)) {
-                            openBookInReader(b);
-                            readerPanel.goToChapterAndPage(chapterIndex, 0);
-                            break;
-                        }
-                    }
-                }
-        );
+        statsAndNotesPanel = new StatsAndNotesPanel(storageService, this::openSavedPosition);
 
         settingsPanel = new SettingsPanel(
                 storageService,
@@ -295,6 +284,16 @@ public class MainWindow extends JFrame {
     public void openBookInReader(Book book) {
         readerPanel.openBook(book);
         switchView(VIEW_READER);
+    }
+
+    private void openSavedPosition(String bookId, ReadingPosition position) {
+        for (Book book : storageService.getAllBooks()) {
+            if (book.getId().equals(bookId)) {
+                readerPanel.openBook(book, position);
+                switchView(VIEW_READER);
+                return;
+            }
+        }
     }
 
     public void importBookFromSystem(File file) {
