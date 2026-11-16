@@ -213,6 +213,8 @@ public class MainWindow extends JFrame {
         readerPanel.disposeResources();
         mangaPanel.disposeResources();
         ranobePanel.disposeResources();
+        onlineCatalogPanel.disposeResources();
+        settingsPanel.disposeResources();
     }
 
     private void rebuildSidebar() {

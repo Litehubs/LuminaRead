@@ -1,5 +1,7 @@
 package com.luminaread.ui;
 
+import com.luminaread.model.Book;
+import com.luminaread.model.DownloadTask;
 import com.luminaread.model.OnlineBookItem;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
@@ -11,6 +13,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.DoubleConsumer;
 import java.util.function.Supplier;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -25,7 +28,7 @@ class OnlineCatalogPanelTest {
             SwingUtilities.invokeAndWait(() -> panel[0] = new OnlineCatalogPanel(new LibraryStorageService(), new OnlineCatalogService(), book -> {}));
             var method = OnlineCatalogPanel.class.getDeclaredMethod("startCatalogLoad", Supplier.class); method.setAccessible(true);
             var statusField = OnlineCatalogPanel.class.getDeclaredField("statusLabel"); statusField.setAccessible(true);
-            var progressField = OnlineCatalogPanel.class.getDeclaredField("downloadProgressBar"); progressField.setAccessible(true);
+            var progressField = OnlineCatalogPanel.class.getDeclaredField("searchProgressBar"); progressField.setAccessible(true);
             Supplier<SearchResult> old = () -> {
                 started.countDown();
                 try { release.await(); } catch (InterruptedException ex) { interrupted.countDown(); Thread.currentThread().interrupt(); }
@@ -55,6 +58,75 @@ class OnlineCatalogPanelTest {
             if (previous == null) System.clearProperty("user.home"); else System.setProperty("user.home", previous);
         }
     }
+    @Test
+    void olderDownloadCannotReplaceCurrentDownloadOrSearchResults(@TempDir Path home) throws Exception {
+        CountDownLatch olderStarted = new CountDownLatch(1);
+        CountDownLatch releaseOlder = new CountDownLatch(1);
+        CountDownLatch olderFinished = new CountDownLatch(1);
+        OnlineCatalogService catalog = new OnlineCatalogService() {
+            @Override
+            public Book downloadAndImportBook(DownloadTask task, LibraryStorageService library,
+                                              DoubleConsumer progress) throws Exception {
+                boolean older = task.getTitle().equals("Старая книга");
+                if (older) {
+                    olderStarted.countDown();
+                    if (!releaseOlder.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Test timed out");
+                }
+                task.setProgressPercent(100);
+                task.setStatus(DownloadTask.Status.COMPLETED);
+                notifyDownloadListeners();
+                if (older) olderFinished.countDown();
+                return null;
+            }
+        };
+
+        OnlineCatalogPanel[] panel = new OnlineCatalogPanel[1];
+        String previous = System.getProperty("user.home");
+        try {
+            System.setProperty("user.home", home.toString());
+            SwingUtilities.invokeAndWait(() -> panel[0] =
+                    new OnlineCatalogPanel(new LibraryStorageService(), catalog, book -> fail("Unexpected open")));
+        } finally {
+            System.setProperty("user.home", previous);
+        }
+        var startDownload = OnlineCatalogPanel.class.getDeclaredMethod(
+                "downloadAndImportBook", String.class, String.class, String.class);
+        startDownload.setAccessible(true);
+        var startSearch = OnlineCatalogPanel.class.getDeclaredMethod("startCatalogLoad", Supplier.class);
+        startSearch.setAccessible(true);
+        var searchStatus = OnlineCatalogPanel.class.getDeclaredField("statusLabel");
+        searchStatus.setAccessible(true);
+        var downloadStatus = OnlineCatalogPanel.class.getDeclaredField("downloadStatusLabel");
+        downloadStatus.setAccessible(true);
+        try {
+            SwingUtilities.invokeAndWait(() -> invokeDownload(startDownload, panel[0], "Старая книга"));
+            assertTrue(olderStarted.await(5, TimeUnit.SECONDS));
+            SwingUtilities.invokeAndWait(() -> {
+                invokeDownload(startDownload, panel[0], "Новая книга");
+                invoke(startSearch, panel[0], () -> new SearchResult(List.of(), List.of()));
+            });
+            await(() -> text(downloadStatus, panel[0]).startsWith("Новая книга · 100%"));
+            await(() -> text(searchStatus, panel[0]).equals("Книги не найдены."));
+            releaseOlder.countDown();
+            assertTrue(olderFinished.await(5, TimeUnit.SECONDS));
+            SwingUtilities.invokeAndWait(() -> {
+                assertTrue(text(downloadStatus, panel[0]).startsWith("Новая книга · 100%"));
+                assertEquals("Книги не найдены.", text(searchStatus, panel[0]));
+            });
+        } finally {
+            releaseOlder.countDown();
+            SwingUtilities.invokeAndWait(panel[0]::disposeResources);
+        }
+    }
+
+    private static void invokeDownload(java.lang.reflect.Method action, OnlineCatalogPanel panel, String title) {
+        try {
+            action.invoke(panel, "https://example.com/book.fb2", title, "FB2");
+        } catch (ReflectiveOperationException ex) {
+            throw new AssertionError(ex);
+        }
+    }
+
     private static void invoke(java.lang.reflect.Method method, Object target, Supplier<SearchResult> supplier) {
         try { method.invoke(target, supplier); } catch (ReflectiveOperationException ex) { throw new RuntimeException(ex); }
     }

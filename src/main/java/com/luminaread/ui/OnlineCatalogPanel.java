@@ -19,7 +19,6 @@ import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
-import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -42,7 +41,13 @@ public class OnlineCatalogPanel extends JPanel {
     private final JPanel resultsListPanel;
     private final JScrollPane resultsScroll;
     private final JLabel statusLabel;
+    private final JProgressBar searchProgressBar;
     private final JProgressBar downloadProgressBar;
+    private final JLabel downloadStatusLabel = ModernUiFactory.plainTextLabel("");
+    private final DownloadJobs downloadJobs;
+    private final Runnable downloadListener = this::refreshDownloadProgress;
+    private DownloadTask currentDownload;
+    private boolean disposed;
     private final LatestSwingRequest<SearchResult> catalogRequests = new LatestSwingRequest<>();
 
     private ThemePalette currentTheme;
@@ -52,6 +57,7 @@ public class OnlineCatalogPanel extends JPanel {
                               Consumer<Book> onBookDownloadedAndOpen) {
         this.storageService = storageService;
         this.catalogService = catalogService;
+        this.downloadJobs = new DownloadJobs(catalogService, storageService);
         this.onBookDownloadedAndOpen = onBookDownloadedAndOpen;
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());
 
@@ -69,12 +75,12 @@ public class OnlineCatalogPanel extends JPanel {
         searchQueryField.addActionListener(e -> executeCatalogSearch());
 
         sourceCombo = new JComboBox<>(new String[]{
-                "Все источники (Flibusta + Либрусек + Gutenberg + Open Library)",
-                "Flibusta OPDS (Русская и зарубежная библиотека)",
-                "Либрусек lib.rus.ec (Зеркало русской библиотеки)",
-                "Project Gutenberg (70 000+ бесплатных книг)",
-                "Open Library / Internet Archive (Миллионы изданий)",
-                "Standard Ebooks (Отборная классика)"
+                "Все источники",
+                "Флибуста",
+                "Либрусек",
+                "Project Gutenberg",
+                "Open Library",
+                "Standard Ebooks"
         });
         sourceCombo.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
 
@@ -86,7 +92,7 @@ public class OnlineCatalogPanel extends JPanel {
         JButton searchBtn = ModernUiFactory.createPrimaryButton("Найти книги", currentTheme);
         searchBtn.addActionListener(e -> executeCatalogSearch());
 
-        row1.add(new JLabel("Запрос (книга / автор):"));
+        row1.add(new JLabel("Книга или автор:"));
         row1.add(searchQueryField);
         row1.add(sourceCombo);
         row1.add(langCombo);
@@ -123,23 +129,41 @@ public class OnlineCatalogPanel extends JPanel {
         resultsScroll.getVerticalScrollBar().setUnitIncrement(42);
         add(resultsScroll, BorderLayout.CENTER);
 
-        JPanel bottomBar = new JPanel(new BorderLayout(14, 0));
-        bottomBar.setBorder(BorderFactory.createEmptyBorder(10, 22, 10, 22));
+        JPanel footer = new JPanel();
+        footer.setLayout(new BoxLayout(footer, BoxLayout.Y_AXIS));
+        footer.setOpaque(false);
+        footer.setBorder(BorderFactory.createEmptyBorder(10, 22, 10, 22));
 
-        statusLabel = new JLabel("Введите название книги или имя автора и нажмите «Найти книги».");
+        statusLabel = new JLabel("Введите название книги или имя автора.");
         statusLabel.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
+        searchProgressBar = progressBar();
+        footer.add(statusRow(statusLabel, searchProgressBar));
 
-        downloadProgressBar = new JProgressBar(0, 100);
-        downloadProgressBar.setStringPainted(true);
-        downloadProgressBar.setFont(ModernUiFactory.uiFont(Font.BOLD, 12));
-        downloadProgressBar.setPreferredSize(new Dimension(260, 22));
-        downloadProgressBar.setVisible(false);
+        downloadProgressBar = progressBar();
+        downloadStatusLabel.setFont(ModernUiFactory.uiFont(Font.PLAIN, 12));
+        downloadStatusLabel.setVisible(false);
+        footer.add(statusRow(downloadStatusLabel, downloadProgressBar));
+        add(footer, BorderLayout.SOUTH);
 
-        bottomBar.add(statusLabel, BorderLayout.CENTER);
-        bottomBar.add(downloadProgressBar, BorderLayout.EAST);
-        add(bottomBar, BorderLayout.SOUTH);
-
+        catalogService.addDownloadListener(downloadListener);
         applyTheme(currentTheme);
+    }
+
+    private static JPanel statusRow(JLabel label, JProgressBar progress) {
+        JPanel row = new JPanel(new BorderLayout(14, 2));
+        row.setOpaque(false);
+        row.add(label, BorderLayout.CENTER);
+        row.add(progress, BorderLayout.EAST);
+        return row;
+    }
+
+    private static JProgressBar progressBar() {
+        JProgressBar bar = new JProgressBar(0, 100);
+        bar.setStringPainted(true);
+        bar.setFont(ModernUiFactory.uiFont(Font.BOLD, 12));
+        bar.setPreferredSize(new Dimension(180, 22));
+        bar.setVisible(false);
+        return bar;
     }
 
     private void executeCatalogSearch() {
@@ -161,9 +185,9 @@ public class OnlineCatalogPanel extends JPanel {
         };
 
         statusLabel.setText("Идет параллельный поиск по онлайн-библиотекам...");
-        downloadProgressBar.setIndeterminate(true);
-        downloadProgressBar.setString("Поиск...");
-        downloadProgressBar.setVisible(true);
+        searchProgressBar.setIndeterminate(true);
+        searchProgressBar.setString("Поиск...");
+        searchProgressBar.setVisible(true);
         resultsListPanel.removeAll();
         resultsListPanel.revalidate();
         resultsListPanel.repaint();
@@ -178,15 +202,16 @@ public class OnlineCatalogPanel extends JPanel {
         UiPersistenceErrors.save(this, "Не удалось сохранить каталог в настройках.", storageService::saveState);
 
         statusLabel.setText("Загрузка OPDS-каталога: " + opdsUrl + " ...");
-        downloadProgressBar.setIndeterminate(true);
-        downloadProgressBar.setString("Загрузка OPDS...");
-        downloadProgressBar.setVisible(true);
+        searchProgressBar.setIndeterminate(true);
+        searchProgressBar.setString("Загрузка OPDS...");
+        searchProgressBar.setVisible(true);
 
         String term = searchQueryField.getText().trim();
         startCatalogLoad(() -> new SearchResult(catalogService.browseCustomOpds(opdsUrl, term), List.of()));
     }
 
     private void startCatalogLoad(java.util.function.Supplier<SearchResult> request) {
+        if (disposed) return;
         catalogRequests.start(request::get, result -> {
             hideCatalogProgress();
             renderSearchResults(result);
@@ -202,8 +227,8 @@ public class OnlineCatalogPanel extends JPanel {
     }
 
     private void hideCatalogProgress() {
-        downloadProgressBar.setIndeterminate(false);
-        downloadProgressBar.setVisible(false);
+        searchProgressBar.setIndeterminate(false);
+        searchProgressBar.setVisible(false);
     }
 
     private void executeDirectUrlDownload() {
@@ -300,56 +325,39 @@ public class OnlineCatalogPanel extends JPanel {
     }
 
     private void downloadAndImportBook(String url, String title, String formatHint) {
+        if (disposed) return;
         DownloadTask task = catalogService.createLibraryDownload(title, formatHint, url);
-
-        statusLabel.setText("Скачивание «" + title + "»: 0%");
-        downloadProgressBar.setIndeterminate(false);
-        downloadProgressBar.setValue(0);
-        downloadProgressBar.setString("0%");
-        downloadProgressBar.setVisible(true);
-
-        Thread dlThread = new Thread(() -> {
-            try {
-                Book imported = catalogService.downloadAndImportBook(
-                        task, storageService,
-                        progress -> SwingUtilities.invokeLater(() -> {
-                            int pct = task.getProgressPercent();
-                            downloadProgressBar.setIndeterminate(false);
-                            downloadProgressBar.setValue(pct);
-                            downloadProgressBar.setString(pct + "%");
-                            statusLabel.setText(task.getFormattedProgressDetails());
-                        })
-                );
-
-                SwingUtilities.invokeLater(() -> {
-                    downloadProgressBar.setValue(100);
-                    downloadProgressBar.setString("100%");
-                    statusLabel.setText("Книга «" + imported.getTitle() + "» скачана (100%) и сохранена в библиотеку!");
-                    int openNow = JOptionPane.showConfirmDialog(
-                            OnlineCatalogPanel.this,
-                            "Книга «" + imported.getTitle() + "» (" + imported.getFormat() + ") скачана на 100%!\nОткрыть её для чтения прямо сейчас?",
-                            "Загрузка завершена (100%)",
-                            JOptionPane.YES_NO_OPTION
-                    );
-                    if (openNow == JOptionPane.YES_OPTION) {
-                        onBookDownloadedAndOpen.accept(imported);
-                    }
-                });
-            } catch (Exception ex) {
-                SwingUtilities.invokeLater(() -> {
-                    downloadProgressBar.setVisible(false);
-                    statusLabel.setText(task.getFormattedProgressDetails());
-                    JOptionPane.showMessageDialog(
-                            OnlineCatalogPanel.this,
-                            task.getFormattedProgressDetails(),
-                            "Ошибка загрузки",
-                            JOptionPane.ERROR_MESSAGE
-                    );
-                });
+        currentDownload = task;
+        refreshDownloadProgress();
+        downloadJobs.start(task, imported -> {
+            if (task != currentDownload) return;
+            refreshDownloadProgress();
+            if (isShowing() && JOptionPane.showConfirmDialog(this,
+                    "Открыть скачанную книгу «" + imported.getTitle() + "»?",
+                    "Книга добавлена в библиотеку", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION) {
+                if (!disposed) onBookDownloadedAndOpen.accept(imported);
             }
-        }, "LuminaRead-Downloader");
-        dlThread.setDaemon(true);
-        dlThread.start();
+        }, error -> refreshDownloadProgress());
+    }
+
+    private void refreshDownloadProgress() {
+        if (disposed || currentDownload == null) return;
+        DownloadTask task = currentDownload;
+        downloadStatusLabel.setText(task.getTitle() + " · " + task.getFormattedProgressDetails());
+        downloadStatusLabel.setVisible(true);
+        boolean unknownTotal = task.getStatus() == DownloadTask.Status.DOWNLOADING && task.getTotalBytes() < 0;
+        downloadProgressBar.setIndeterminate(unknownTotal);
+        downloadProgressBar.setValue(task.getProgressPercent());
+        downloadProgressBar.setString(unknownTotal ? "Скачивание…" : task.getProgressPercent() + "%");
+        downloadProgressBar.setVisible(task.getStatus() != DownloadTask.Status.FAILED);
+    }
+
+    void disposeResources() {
+        if (disposed) return;
+        disposed = true;
+        catalogRequests.cancel();
+        catalogService.removeDownloadListener(downloadListener);
+        downloadJobs.close();
     }
 
     public void applyTheme(ThemePalette theme) {
@@ -359,6 +367,7 @@ public class OnlineCatalogPanel extends JPanel {
         resultsListPanel.setBackground(theme.getBackground());
         resultsScroll.getViewport().setBackground(theme.getBackground());
         statusLabel.setForeground(theme.getTextPrimary());
+        downloadStatusLabel.setForeground(theme.getTextSecondary());
         ModernUiFactory.styleTextField(searchQueryField, theme);
         ModernUiFactory.styleTextField(customUrlField, theme);
     }

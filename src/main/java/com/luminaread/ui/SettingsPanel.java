@@ -1,7 +1,6 @@
 package com.luminaread.ui;
 
 import com.luminaread.model.Book;
-import com.luminaread.model.DownloadTask;
 import com.luminaread.model.ReaderSettings;
 import com.luminaread.service.ITtsService;
 import com.luminaread.service.LibraryStorageService;
@@ -19,11 +18,8 @@ import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSlider;
-import javax.swing.JTextField;
-import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -33,24 +29,19 @@ import java.awt.GridLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
-import java.util.List;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 public class SettingsPanel extends JPanel {
     private final LibraryStorageService storageService;
-    private final OnlineCatalogService catalogService;
     private final ITtsService ttsService;
     private final Consumer<ThemePalette> onThemeChangedGlobal;
     private final Runnable onSettingsUpdated;
-    private final Consumer<Book> onOpenDownloadedBook;
 
     private final JPanel mainContainer;
     private final JScrollPane mainScroll;
-    private final JPanel downloadsListPanel;
-    private final JTextField quickDownloadUrlField;
-    private final JTextField quickDownloadTitleField;
     private final JPanel themeButtonsGrid;
+    private final DownloadsSection downloads;
 
     private ThemePalette currentTheme;
 
@@ -70,11 +61,10 @@ public class SettingsPanel extends JPanel {
                          Runnable onSettingsUpdated,
                          Consumer<Book> onOpenDownloadedBook) {
         this.storageService = storageService;
-        this.catalogService = catalogService;
         this.ttsService = ttsService;
         this.onThemeChangedGlobal = onThemeChangedGlobal;
         this.onSettingsUpdated = onSettingsUpdated;
-        this.onOpenDownloadedBook = onOpenDownloadedBook;
+        this.downloads = new DownloadsSection(catalogService, storageService, onOpenDownloadedBook);
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());
 
         setLayout(new BorderLayout(0, 0));
@@ -83,24 +73,13 @@ public class SettingsPanel extends JPanel {
         mainContainer.setLayout(new BoxLayout(mainContainer, BoxLayout.Y_AXIS));
         mainContainer.setBorder(BorderFactory.createEmptyBorder(18, 24, 28, 24));
 
-        downloadsListPanel = new JPanel();
-        downloadsListPanel.setLayout(new BoxLayout(downloadsListPanel, BoxLayout.Y_AXIS));
-        downloadsListPanel.setOpaque(false);
-
-        quickDownloadUrlField = new JTextField("https://www.gutenberg.org/ebooks/1342.epub3.images", 26);
-        quickDownloadTitleField = new JTextField("Новая книга", 14);
-
         themeButtonsGrid = new JPanel(new GridLayout(2, 3, 10, 10));
         themeButtonsGrid.setOpaque(false);
-
-        buildFullSettingsSections();
 
         mainScroll = SmoothScrollUtil.enhanceAndReturn(new JScrollPane(mainContainer));
         mainScroll.setBorder(BorderFactory.createEmptyBorder());
         mainScroll.getVerticalScrollBar().setUnitIncrement(42);
         add(mainScroll, BorderLayout.CENTER);
-
-        catalogService.addDownloadListener(this::refreshDownloadsSection);
 
         applyTheme(currentTheme);
     }
@@ -116,35 +95,8 @@ public class SettingsPanel extends JPanel {
         mainContainer.add(pageTitle);
         mainContainer.add(Box.createVerticalStrut(14));
 
-        JPanel downloadsSection = createSectionCard("Загрузки книг");
-
-        JPanel quickDlBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
-        quickDlBar.setOpaque(false);
-        quickDlBar.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        ModernUiFactory.styleTextField(quickDownloadTitleField, currentTheme);
-        ModernUiFactory.styleTextField(quickDownloadUrlField, currentTheme);
-
-        JButton startQuickDlBtn = ModernUiFactory.createPrimaryButton("Скачать по ссылке", currentTheme);
-        startQuickDlBtn.addActionListener(e -> startQuickUrlDownload());
-
-        JButton clearDlBtn = ModernUiFactory.createFlatButton("Очистить завершенные", currentTheme);
-        clearDlBtn.addActionListener(e -> catalogService.clearCompletedTasks());
-
-        quickDlBar.add(new JLabel("Название:"));
-        quickDlBar.add(quickDownloadTitleField);
-        quickDlBar.add(new JLabel("URL файла:"));
-        quickDlBar.add(quickDownloadUrlField);
-        quickDlBar.add(startQuickDlBtn);
-        quickDlBar.add(clearDlBtn);
-
-        downloadsSection.add(quickDlBar);
-        downloadsSection.add(Box.createVerticalStrut(10));
-
-        downloadsListPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        downloadsSection.add(downloadsListPanel);
-
-        mainContainer.add(downloadsSection);
+        downloads.applyTheme(currentTheme);
+        mainContainer.add(downloads);
         mainContainer.add(Box.createVerticalStrut(16));
 
         JPanel themeSection = createSectionCard("Тема оформления и защита зрения");
@@ -465,102 +417,11 @@ public class SettingsPanel extends JPanel {
     }
 
     public void refreshDownloadsSection() {
-        downloadsListPanel.removeAll();
-        List<DownloadTask> tasks = catalogService.getDownloadTasks();
-
-        if (tasks.isEmpty()) {
-            JLabel emptyLbl = new JLabel("Пока нет активных или завершенных загрузок. Скачайте любую книгу в разделе «Скачать книги» или по прямой ссылке выше.");
-            emptyLbl.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
-            emptyLbl.setForeground(currentTheme.getTextSecondary());
-            emptyLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-            downloadsListPanel.add(emptyLbl);
-        } else {
-            for (DownloadTask task : tasks) {
-                downloadsListPanel.add(createDownloadTaskRow(task));
-                downloadsListPanel.add(Box.createVerticalStrut(8));
-            }
-        }
-        downloadsListPanel.revalidate();
-        downloadsListPanel.repaint();
+        downloads.refresh();
     }
 
-    private JPanel createDownloadTaskRow(DownloadTask task) {
-        JPanel row = new JPanel(new BorderLayout(14, 6));
-        row.setBackground(currentTheme.getSurface());
-        row.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(currentTheme.getBorder(), 1, true),
-                BorderFactory.createEmptyBorder(10, 14, 10, 14)
-        ));
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(920, 86));
-
-        JPanel leftCol = new JPanel();
-        leftCol.setLayout(new BoxLayout(leftCol, BoxLayout.Y_AXIS));
-        leftCol.setOpaque(false);
-
-        JLabel titleLbl = ModernUiFactory.plainTextLabel(task.getTitle() + "  [" + task.getFormat() + "]");
-        titleLbl.setFont(ModernUiFactory.uiFont(Font.BOLD, 14));
-        titleLbl.setForeground(currentTheme.getTextPrimary());
-        titleLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel detailLbl = new JLabel(task.getFormattedProgressDetails());
-        detailLbl.setFont(ModernUiFactory.uiFont(Font.PLAIN, 12));
-        detailLbl.setForeground(currentTheme.getTextSecondary());
-        detailLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        leftCol.add(titleLbl);
-        leftCol.add(Box.createVerticalStrut(4));
-        leftCol.add(detailLbl);
-
-        JPanel rightCol = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 4));
-        rightCol.setOpaque(false);
-
-        JProgressBar bar = new JProgressBar(0, 100);
-        bar.setValue(task.getProgressPercent());
-        bar.setString(task.getProgressPercent() + "%");
-        bar.setStringPainted(true);
-        bar.setFont(ModernUiFactory.uiFont(Font.BOLD, 12));
-        bar.setPreferredSize(new Dimension(210, 22));
-        rightCol.add(bar);
-
-        if (task.getStatus() == DownloadTask.Status.COMPLETED && task.getImportedBook() != null) {
-            JButton openBtn = ModernUiFactory.createPrimaryButton("Читать книгу", currentTheme);
-            openBtn.addActionListener(e -> onOpenDownloadedBook.accept(task.getImportedBook()));
-            rightCol.add(openBtn);
-        }
-
-        row.add(leftCol, BorderLayout.CENTER);
-        row.add(rightCol, BorderLayout.EAST);
-        return row;
-    }
-
-    private void startQuickUrlDownload() {
-        String url = quickDownloadUrlField.getText().trim();
-        String title = quickDownloadTitleField.getText().trim();
-        if (url.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Введите прямую ссылку на файл книги.");
-            return;
-        }
-        if (title.isEmpty()) title = "Скачанная книга";
-
-        final String finalTitle = title;
-        DownloadTask task = catalogService.createLibraryDownload(finalTitle, "АВТО", url);
-        refreshDownloadsSection();
-
-        Thread t = new Thread(() -> {
-            try {
-                catalogService.downloadAndImportBook(task, storageService, null);
-            } catch (Exception ex) {
-                SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
-                        SettingsPanel.this,
-                        task.getFormattedProgressDetails(),
-                        "Ошибка загрузки",
-                        JOptionPane.ERROR_MESSAGE
-                ));
-            }
-        }, "LuminaRead-QuickDownloader");
-        t.setDaemon(true);
-        t.start();
+    void disposeResources() {
+        downloads.disposeResources();
     }
 
     private void clearImageCache() {

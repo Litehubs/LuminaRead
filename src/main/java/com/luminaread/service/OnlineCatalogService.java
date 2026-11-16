@@ -26,6 +26,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutionException;
 import java.util.function.DoubleConsumer;
 import java.util.regex.Pattern;
@@ -49,6 +50,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
     private final IBookDownloader bookDownloader;
     private final List<DownloadTask> downloadTasks = new CopyOnWriteArrayList<>();
     private final List<Runnable> downloadListeners = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean downloadNotificationPending = new AtomicBoolean();
 
     public OnlineCatalogService() {
         this(new OpdsFeedParser(), null, null);
@@ -93,9 +95,15 @@ public class OnlineCatalogService implements IOnlineCatalogService {
         }
     }
 
+    public void removeDownloadListener(Runnable listener) {
+        downloadListeners.remove(listener);
+    }
+
     @Override
     public void notifyDownloadListeners() {
+        if (!downloadNotificationPending.compareAndSet(false, true)) return;
         SwingUtilities.invokeLater(() -> {
+            downloadNotificationPending.set(false);
             for (Runnable r : downloadListeners) {
                 try {
                     r.run();
