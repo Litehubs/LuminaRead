@@ -109,7 +109,7 @@ public class SettingsPanel extends JPanel {
         mainContainer.removeAll();
         ReaderSettings s = storageService.getSettings();
 
-        JLabel pageTitle = new JLabel("Настройки приложения и Центр загрузок книг");
+        JLabel pageTitle = new JLabel("Настройки и загрузки");
         pageTitle.setFont(ModernUiFactory.uiFont(Font.BOLD, 19));
         pageTitle.setForeground(currentTheme.getTextPrimary());
         pageTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -160,6 +160,18 @@ public class SettingsPanel extends JPanel {
         themeButtonsGrid.setAlignmentX(Component.LEFT_ALIGNMENT);
         themeButtonsGrid.setMaximumSize(new Dimension(920, 96));
         themeSection.add(themeButtonsGrid);
+        JCheckBox reduceMotion = new JCheckBox("Отключить анимации переходов", s.isReduceMotion());
+        reduceMotion.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
+        reduceMotion.setForeground(currentTheme.getTextPrimary());
+        reduceMotion.setOpaque(false);
+        reduceMotion.setAlignmentX(Component.LEFT_ALIGNMENT);
+        reduceMotion.addActionListener(e -> {
+            s.setReduceMotion(reduceMotion.isSelected());
+            saveSettings();
+            onSettingsUpdated.run();
+        });
+        themeSection.add(Box.createVerticalStrut(8));
+        themeSection.add(reduceMotion);
         themeSection.add(Box.createVerticalStrut(12));
 
         JPanel brightnessRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 4));
@@ -384,7 +396,7 @@ public class SettingsPanel extends JPanel {
             if (ttsService.isSpeaking()) {
                 ttsService.stop();
             } else {
-                ttsService.speakText("Проверка голосового чтения LuminaRead Pro. Приятного чтения!",
+                ttsService.speakText("Проверка голосового чтения LuminaRead. Приятного чтения!",
                         s.getTtsRateWpm(), 0, null);
             }
         });
@@ -437,7 +449,7 @@ public class SettingsPanel extends JPanel {
         String activeId = storageService.getSettings().getThemeId();
         for (ThemePalette palette : ThemePalette.PRESETS.values()) {
             boolean isCurrent = palette.getId().equals(activeId);
-            String label = isCurrent ? ("• " + palette.getDisplayName() + " [Активна]") : palette.getDisplayName();
+            String label = isCurrent ? ("• " + palette.getDisplayName()) : palette.getDisplayName();
             JButton btn = isCurrent
                     ? ModernUiFactory.createPrimaryButton(label, currentTheme)
                     : ModernUiFactory.createFlatButton(label, currentTheme);
@@ -582,6 +594,7 @@ public class SettingsPanel extends JPanel {
         s.setTwoColumnSpread(false);
         s.setDimmerOpacity(0.0);
         s.setWarmEyeCareFilter(false);
+        s.setReduceMotion(false);
         s.setAutoScrollSpeed(35);
         s.setTtsRateWpm(175);
         saveSettings();

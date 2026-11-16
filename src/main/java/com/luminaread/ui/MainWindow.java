@@ -10,6 +10,7 @@ import com.luminaread.service.OnlineCatalogService;
 import com.luminaread.service.RanobeService;
 import com.luminaread.service.TtsService;
 
+import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -22,15 +23,12 @@ import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import java.awt.BorderLayout;
-import java.awt.CardLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Image;
 import java.awt.Taskbar;
 import java.awt.Toolkit;
-import java.io.File;
-import javax.imageio.ImageIO;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.dnd.DnDConstants;
 import java.awt.dnd.DropTarget;
@@ -55,8 +53,7 @@ public class MainWindow extends JFrame {
 
     private final LibraryStorageService storageService;
     private final JPanel sidebarPanel;
-    private final CardLayout contentCardLayout;
-    private final JPanel contentCardsPanel;
+    private final MotionCardPanel contentCardsPanel;
 
     private final LibraryPanel libraryPanel;
     private final ReaderPanel readerPanel;
@@ -78,7 +75,7 @@ public class MainWindow extends JFrame {
                       OnlineCatalogService catalogService,
                       ITtsService ttsService,
                       IDictionaryService dictionaryService) {
-        super("LuminaRead — Минималистичная читалка и онлайн-каталог книг");
+        super("LuminaRead — Книги, манга и ранобэ");
         this.storageService = storageService;
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());
 
@@ -95,8 +92,7 @@ public class MainWindow extends JFrame {
         sidebarPanel.setPreferredSize(new Dimension(235, 800));
         sidebarPanel.setBorder(BorderFactory.createEmptyBorder(20, 16, 20, 16));
 
-        contentCardLayout = new CardLayout();
-        contentCardsPanel = new JPanel(contentCardLayout);
+        contentCardsPanel = new MotionCardPanel();
 
         libraryPanel = new LibraryPanel(
                 storageService,
@@ -142,7 +138,7 @@ public class MainWindow extends JFrame {
                 catalogService,
                 ttsService,
                 this::applyGlobalTheme,
-                () -> readerPanel.applyTheme(this.currentTheme),
+                this::applyReaderPreferences,
                 book -> {
                     libraryPanel.refreshBooksGrid();
                     openBookInReader(book);
@@ -161,13 +157,13 @@ public class MainWindow extends JFrame {
             sidebarPanel.repaint();
         }, new RanobeService(), true);
 
-        contentCardsPanel.add(libraryPanel, VIEW_LIBRARY);
-        contentCardsPanel.add(readerPanel, VIEW_READER);
-        contentCardsPanel.add(onlineCatalogPanel, VIEW_CATALOG);
-        contentCardsPanel.add(ranobePanel, VIEW_RANOBE);
-        contentCardsPanel.add(mangaPanel, VIEW_MANGA);
-        contentCardsPanel.add(statsAndNotesPanel, VIEW_STATS);
-        contentCardsPanel.add(settingsPanel, VIEW_SETTINGS);
+        contentCardsPanel.addCard(VIEW_LIBRARY, libraryPanel);
+        contentCardsPanel.addCard(VIEW_READER, readerPanel);
+        contentCardsPanel.addCard(VIEW_CATALOG, onlineCatalogPanel);
+        contentCardsPanel.addCard(VIEW_RANOBE, ranobePanel);
+        contentCardsPanel.addCard(VIEW_MANGA, mangaPanel);
+        contentCardsPanel.addCard(VIEW_STATS, statsAndNotesPanel);
+        contentCardsPanel.addCard(VIEW_SETTINGS, settingsPanel);
 
         add(sidebarPanel, BorderLayout.WEST);
         add(contentCardsPanel, BorderLayout.CENTER);
@@ -196,9 +192,24 @@ public class MainWindow extends JFrame {
         });
 
         applyGlobalTheme(currentTheme);
+        updateAnimations();
+    }
+
+    private void applyReaderPreferences() {
+        updateAnimations();
+        readerPanel.applyTheme(currentTheme);
+    }
+
+    private void updateAnimations() {
+        boolean enabled = !storageService.getSettings().isReduceMotion()
+                && !Boolean.getBoolean("luminaread.reduceMotion");
+        contentCardsPanel.setAnimationsEnabled(enabled);
+        mangaPanel.setAnimationsEnabled(enabled);
+        ranobePanel.setAnimationsEnabled(enabled);
     }
 
     private void disposeReadingResources() {
+        contentCardsPanel.cancelTransition();
         readerPanel.disposeResources();
         mangaPanel.disposeResources();
         ranobePanel.disposeResources();
@@ -212,14 +223,7 @@ public class MainWindow extends JFrame {
         brandTitle.setForeground(currentTheme.getAccent());
         brandTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel brandSub = new JLabel("Reader Pro Edition");
-        brandSub.setFont(ModernUiFactory.uiFont(Font.PLAIN, 12));
-        brandSub.setForeground(currentTheme.getTextSecondary());
-        brandSub.setAlignmentX(Component.LEFT_ALIGNMENT);
-
         sidebarPanel.add(brandTitle);
-        sidebarPanel.add(Box.createVerticalStrut(2));
-        sidebarPanel.add(brandSub);
         sidebarPanel.add(Box.createVerticalStrut(24));
 
         addNavButton("Моя библиотека", VIEW_LIBRARY);
@@ -262,8 +266,14 @@ public class MainWindow extends JFrame {
     }
 
     public void switchView(String viewKey) {
-        if (VIEW_MANGA.equals(currentView) && !VIEW_MANGA.equals(viewKey)) mangaPanel.stopAutoScroll();
-        if (VIEW_RANOBE.equals(currentView) && !VIEW_RANOBE.equals(viewKey)) ranobePanel.stopAutoScroll();
+        if (VIEW_MANGA.equals(currentView) && !VIEW_MANGA.equals(viewKey)) {
+            mangaPanel.stopAutoScroll();
+            mangaPanel.cancelViewTransition();
+        }
+        if (VIEW_RANOBE.equals(currentView) && !VIEW_RANOBE.equals(viewKey)) {
+            ranobePanel.stopAutoScroll();
+            ranobePanel.cancelViewTransition();
+        }
         this.currentView = viewKey;
         if (!VIEW_READER.equals(viewKey)) {
             readerPanel.stopActiveFeatures();
@@ -276,7 +286,7 @@ public class MainWindow extends JFrame {
             settingsPanel.refreshDownloadsSection();
         }
         sidebarPanel.setVisible(!VIEW_READER.equals(viewKey));
-        contentCardLayout.show(contentCardsPanel, viewKey);
+        contentCardsPanel.showCard(viewKey);
         rebuildSidebar();
     }
 

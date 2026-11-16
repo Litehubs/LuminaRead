@@ -66,7 +66,8 @@ public class SettingsJsonRepository {
                 sb.append("    \"autoScrollSpeed\": ").append(display.getAutoScrollSpeed()).append(",\n");
                 sb.append("    \"ttsRateWpm\": ").append(display.getTtsRateWpm()).append(",\n");
                 sb.append("    \"tapZonesEnabled\": ").append(display.isTapZonesEnabled()).append(",\n");
-                sb.append("    \"showStatusBarInReader\": ").append(display.isShowStatusBarInReader()).append("\n");
+                sb.append("    \"showStatusBarInReader\": ").append(display.isShowStatusBarInReader()).append(",\n");
+                sb.append("    \"reduceMotion\": ").append(display.isReduceMotion()).append("\n");
                 sb.append("  }");
             }
 
@@ -147,6 +148,7 @@ public class SettingsJsonRepository {
                     if (dm.get("ttsRateWpm") != null) display.setTtsRateWpm(asInt(dm.get("ttsRateWpm"), display.getTtsRateWpm()));
                     if (dm.get("tapZonesEnabled") != null) display.setTapZonesEnabled(Boolean.parseBoolean(String.valueOf(dm.get("tapZonesEnabled"))));
                     if (dm.get("showStatusBarInReader") != null) display.setShowStatusBarInReader(Boolean.parseBoolean(String.valueOf(dm.get("showStatusBarInReader"))));
+                    if (dm.get("reduceMotion") instanceof Boolean reduced) display.setReduceMotion(reduced);
                 }
             }
 

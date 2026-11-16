@@ -66,6 +66,7 @@ public class ReaderDisplayConfig implements Serializable {
     private int ttsRateWpm = 175;
     private boolean tapZonesEnabled = true;
     private boolean showStatusBarInReader = true;
+    private boolean reduceMotion;
 
     public ReaderDisplayConfig() {}
 
@@ -211,5 +212,13 @@ public class ReaderDisplayConfig implements Serializable {
 
     public void setShowStatusBarInReader(boolean showStatusBarInReader) {
         this.showStatusBarInReader = showStatusBarInReader;
+    }
+
+    public boolean isReduceMotion() {
+        return reduceMotion;
+    }
+
+    public void setReduceMotion(boolean reduceMotion) {
+        this.reduceMotion = reduceMotion;
     }
 }

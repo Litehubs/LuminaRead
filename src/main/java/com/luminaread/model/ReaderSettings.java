@@ -117,6 +117,9 @@ public class ReaderSettings implements Serializable {
     public boolean isShowStatusBarInReader() { return displayConfig.isShowStatusBarInReader(); }
     public void setShowStatusBarInReader(boolean showStatusBarInReader) { displayConfig.setShowStatusBarInReader(showStatusBarInReader); }
 
+    public boolean isReduceMotion() { return displayConfig.isReduceMotion(); }
+    public void setReduceMotion(boolean reduceMotion) { displayConfig.setReduceMotion(reduceMotion); }
+
     public List<String> getCustomOpdsCatalogs() {
         return opdsConfig.getCustomOpdsCatalogs();
     }

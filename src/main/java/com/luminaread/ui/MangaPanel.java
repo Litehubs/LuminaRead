@@ -46,8 +46,7 @@ public class MangaPanel extends JPanel {
     private final LatestSwingRequest<String> detailDescriptionRequest = new LatestSwingRequest<>();
     private final Consumer<Boolean> onToggleSidebar;
 
-    private final CardLayout viewLayout = new CardLayout();
-    private final JPanel mainContainer = new JPanel(viewLayout);
+    private final MotionCardPanel mainContainer = new MotionCardPanel();
 
     private final Map<String, MangaItem> favoriteManga = new LinkedHashMap<>();
     private final Map<String, MangaItem> historyManga = new LinkedHashMap<>();
@@ -127,9 +126,9 @@ public class MangaPanel extends JPanel {
 
         loadPreferences();
 
-        mainContainer.add(buildExploreView(), "EXPLORE");
-        mainContainer.add(buildDetailsView(), "DETAILS");
-        mainContainer.add(buildReaderView(), "READER");
+        mainContainer.addCard("EXPLORE", buildExploreView());
+        mainContainer.addCard("DETAILS", buildDetailsView());
+        mainContainer.addCard("READER", buildReaderView());
 
         add(mainContainer, BorderLayout.CENTER);
 
@@ -139,9 +138,18 @@ public class MangaPanel extends JPanel {
         if (initialSearch) performSearch("");
     }
 
+    void setAnimationsEnabled(boolean enabled) {
+        mainContainer.setAnimationsEnabled(enabled);
+    }
+
+    void cancelViewTransition() {
+        mainContainer.cancelTransition();
+    }
+
     public void disposeResources() {
         if (disposed) return;
         disposed = true;
+        cancelViewTransition();
         yandexService.removeAuthListener(authListener);
         mangaSearch.cancel();
         cancelDetailRequests();
@@ -254,7 +262,7 @@ public class MangaPanel extends JPanel {
             cancelDetailRequests();
             currentLoadToken.incrementAndGet();
             if (onToggleSidebar != null) onToggleSidebar.accept(true);
-            viewLayout.show(mainContainer, "EXPLORE");
+            mainContainer.showCard("EXPLORE");
         });
 
         favToggleBtn.setFocusPainted(false);
@@ -353,7 +361,7 @@ public class MangaPanel extends JPanel {
             currentLoadToken.incrementAndGet();
             chapterLoading = false;
             if (onToggleSidebar != null) onToggleSidebar.accept(true);
-            viewLayout.show(mainContainer, "DETAILS");
+            mainContainer.showCard("DETAILS");
         });
 
         settingsPopupBtn.setFont(new Font("SansSerif", Font.BOLD, 12));
@@ -742,7 +750,7 @@ public class MangaPanel extends JPanel {
         } finally {
             updatingLanguage = false;
         }
-        viewLayout.show(mainContainer, "DETAILS");
+        mainContainer.showCard("DETAILS");
 
         detailCoverRequest.start(() -> {
             var image = mangaService.loadImageCached(item.coverUrl);
@@ -814,7 +822,7 @@ public class MangaPanel extends JPanel {
         readerCanvasPanel.revalidate();
         readerCanvasPanel.repaint();
 
-        viewLayout.show(mainContainer, "READER");
+        mainContainer.showCard("READER");
 
         workers.submit(() -> token == currentLoadToken.get(), () -> mangaService.fetchPageUrls(ch), loaded -> {
             chapterLoading = false;
@@ -917,7 +925,7 @@ public class MangaPanel extends JPanel {
             backToChBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
             backToChBtn.addActionListener(e -> {
                 if (onToggleSidebar != null) onToggleSidebar.accept(true);
-                viewLayout.show(mainContainer, "DETAILS");
+                mainContainer.showCard("DETAILS");
             });
 
             errCard.add(Box.createVerticalStrut(60));

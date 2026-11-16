@@ -119,7 +119,7 @@ public class LuminaReadApp {
             Path sampleGuide = booksDir.resolve("Руководство_LuminaRead_Pro.md");
             if (!Files.exists(sampleGuide)) {
                 String mdText = """
-                        Название: Полное руководство по возможностям LuminaRead Pro
+                        Название: Руководство по LuminaRead
                         Автор: Команда LuminaRead
 
                         # Глава 1. Быстрый старт и поддерживаемые форматы

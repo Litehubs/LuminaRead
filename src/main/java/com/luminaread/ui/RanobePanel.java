@@ -43,8 +43,7 @@ public class RanobePanel extends JPanel {
     private final LatestRequest detailRequests = new LatestRequest();
     private final Consumer<Boolean> onToggleSidebar;
 
-    private final CardLayout viewLayout = new CardLayout();
-    private final JPanel mainContainer = new JPanel(viewLayout);
+    private final MotionCardPanel mainContainer = new MotionCardPanel();
 
     private final Map<String, RanobeItem> favoriteRanobe = new LinkedHashMap<>();
     private final Map<String, RanobeItem> historyRanobe = new LinkedHashMap<>();
@@ -121,11 +120,11 @@ public class RanobePanel extends JPanel {
 
         loadPreferences();
 
-        mainContainer.add(buildExploreView(), "EXPLORE");
-        mainContainer.add(buildDetailsView(), "DETAILS");
+        mainContainer.addCard("EXPLORE", buildExploreView());
+        mainContainer.addCard("DETAILS", buildDetailsView());
 
         readerScrollPane = buildReaderScrollPane();
-        mainContainer.add(buildReaderView(), "READER");
+        mainContainer.addCard("READER", buildReaderView());
 
         add(mainContainer, BorderLayout.CENTER);
 
@@ -135,9 +134,18 @@ public class RanobePanel extends JPanel {
         if (initialSearch) performSearch("");
     }
 
+    void setAnimationsEnabled(boolean enabled) {
+        mainContainer.setAnimationsEnabled(enabled);
+    }
+
+    void cancelViewTransition() {
+        mainContainer.cancelTransition();
+    }
+
     public void disposeResources() {
         if (disposed) return;
         disposed = true;
+        cancelViewTransition();
         yandexService.removeAuthListener(authListener);
         searchRequests.invalidate();
         detailRequests.invalidate();
@@ -298,7 +306,7 @@ public class RanobePanel extends JPanel {
             detailRequests.invalidate();
             loadToken.incrementAndGet();
             if (onToggleSidebar != null) onToggleSidebar.accept(true);
-            viewLayout.show(mainContainer, "EXPLORE");
+            mainContainer.showCard("EXPLORE");
         });
 
         favToggleBtn.setFocusPainted(false);
@@ -368,7 +376,7 @@ public class RanobePanel extends JPanel {
         chapters.clear();
         chapterListModel.clear();
         chapterStatus.setText("Загрузка глав...");
-        viewLayout.show(mainContainer, "DETAILS");
+        mainContainer.showCard("DETAILS");
 
         workers.execute(() -> {
             ImageIcon icon = null;
@@ -509,7 +517,7 @@ public class RanobePanel extends JPanel {
             stopAutoScroll();
             loadToken.incrementAndGet();
             if (onToggleSidebar != null) onToggleSidebar.accept(true);
-            viewLayout.show(mainContainer, "DETAILS");
+            mainContainer.showCard("DETAILS");
         });
 
         textSettingsBtn.setFont(new Font("SansSerif", Font.BOLD, 12));
@@ -719,7 +727,7 @@ public class RanobePanel extends JPanel {
         readerTitleLabel.setText(currentChapter.toString() + " — загрузка...");
         textEditorPane.setText("<html><body style='text-align:center; padding:50px; color:#aaa; font-family:sans-serif;'>"
                 + "<h2>⏳ Загрузка главы " + com.luminaread.util.HtmlSanitizer.escapeHtml(requestedChapter.number) + "...</h2></body></html>");
-        viewLayout.show(mainContainer, "READER");
+        mainContainer.showCard("READER");
 
         workers.submit(() -> token == loadToken.get(), () -> {
             var loaded = ranobeService.fetchChapterContent(requestedChapter, requestedTitleId);
