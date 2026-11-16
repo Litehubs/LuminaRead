@@ -74,6 +74,11 @@ public class ReaderPanel extends JPanel {
     private final ReaderBookLoader bookLoader;
     private List<String> currentChapterPages = Collections.emptyList();
     private ReaderSettings.ReadingMode chapterReadingMode;
+    private static final int SCROLL_TO_END = -1;
+    private Integer pendingScrollOffset;
+    private boolean disposed;
+    private final Timer restoreScrollTimer;
+    private final Timer saveScrollTimer;
     private int currentChapterIndex = 0;
     private int currentPageIndex = 0;
     private String activeSearchHighlightTerm = "";
@@ -284,7 +289,20 @@ public class ReaderPanel extends JPanel {
 
         editorScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         editorScrollPane.getVerticalScrollBar().setUnitIncrement(42);
-        editorScrollPane.getVerticalScrollBar().addAdjustmentListener(e -> updateStatusBar());
+        restoreScrollTimer = new Timer(400, e -> restoreScrollPosition(true));
+        restoreScrollTimer.setRepeats(false);
+        saveScrollTimer = new Timer(700, e -> saveReadingProgress());
+        saveScrollTimer.setRepeats(false);
+        editorScrollPane.getVerticalScrollBar().addAdjustmentListener(e -> {
+            if (pendingScrollOffset != null) {
+                if (editorScrollPane.getViewport().getHeight() > 0 && !restoreScrollTimer.isRunning()) {
+                    restoreScrollTimer.start();
+                }
+            } else {
+                recordScrollPosition();
+            }
+            updateStatusBar();
+        });
 
         readerCanvasWrapper = new JPanel(new BorderLayout()) {
             @Override
@@ -437,8 +455,14 @@ public class ReaderPanel extends JPanel {
     }
 
     public void openBook(Book book) {
-        if (book == null) return;
+        openBook(book, null);
+    }
+
+    void openBook(Book book, ReadingPosition requestedPosition) {
+        if (book == null || disposed) return;
         stopActiveFeatures();
+        restoreScrollTimer.stop();
+        pendingScrollOffset = null;
         currentBook = book;
         lastWheelChapterDirection = 0;
         currentContent = null;
@@ -453,10 +477,9 @@ public class ReaderPanel extends JPanel {
             currentContent = content;
             book.setLastOpenedTimestamp(System.currentTimeMillis());
             for (Chapter chapter : currentContent.getChapters()) tocListModel.addElement(chapter);
-            int startChapter = Math.min(Math.max(0, book.getCurrentChapterIndex()),
-                    Math.max(0, currentContent.getChapters().size() - 1));
-            int startPage = Math.max(0, book.getCurrentPageInChapter());
-            goToChapterAndPage(startChapter, startPage);
+            ReadingPosition position = requestedPosition != null ? requestedPosition
+                    : new ReadingPosition(book.getCurrentChapterIndex(), book.getCurrentPageInChapter(), book.getScrollOffset());
+            goToChapterAndPage(position.chapterIndex(), position.pageIndex(), Math.max(0, position.scrollOffset()));
         }, ex -> {
             currentContent = null;
             statusLeftLabel.setText("Не удалось открыть книгу");
@@ -468,10 +491,10 @@ public class ReaderPanel extends JPanel {
     }
 
     public void goToChapterAndPage(int chapterIdx, int pageIdx) {
-        goToChapterAndPage(chapterIdx, pageIdx, false);
+        goToChapterAndPage(chapterIdx, pageIdx, 0);
     }
 
-    private void goToChapterAndPage(int chapterIdx, int pageIdx, boolean fromEnd) {
+    private void goToChapterAndPage(int chapterIdx, int pageIdx, int scrollOffset) {
         if (currentContent == null || currentContent.getChapters().isEmpty()) return;
         int totalChapters = currentContent.getChapters().size();
         this.currentChapterIndex = Math.max(0, Math.min(totalChapters - 1, chapterIdx));
@@ -493,8 +516,7 @@ public class ReaderPanel extends JPanel {
             tocList.setSelectedIndex(currentChapterIndex);
         }
 
-        renderCurrentViewport(fromEnd);
-        saveReadingProgress();
+        showPageAt(scrollOffset);
     }
 
     private boolean scrollToAdjacentChapter(int direction) {
@@ -513,16 +535,24 @@ public class ReaderPanel extends JPanel {
         }
         lastWheelChapterChange = now;
         lastWheelChapterDirection = direction;
-        goToChapterAndPage(adjacentChapter, 0, direction < 0);
+        goToChapterAndPage(adjacentChapter, 0, direction < 0 ? SCROLL_TO_END : 0);
         return true;
     }
 
-    private void renderCurrentViewport() {
-        renderCurrentViewport(false);
+    private void showPageAt(int scrollOffset) {
+        currentBook.setScrollOffset(Math.max(0, scrollOffset));
+        renderCurrentViewport(scrollOffset);
+        saveReadingProgress();
     }
 
-    private void renderCurrentViewport(boolean fromEnd) {
-        if (currentContent == null || currentContent.getChapters().isEmpty()) return;
+    private void renderCurrentViewport() {
+        if (currentBook != null) renderCurrentViewport(currentBook.getScrollOffset());
+    }
+
+    private void renderCurrentViewport(int scrollOffset) {
+        if (disposed || currentContent == null || currentContent.getChapters().isEmpty()) return;
+        restoreScrollTimer.stop();
+        pendingScrollOffset = scrollOffset;
         ReaderSettings settings = storageService.getSettings();
 
         HTMLEditorKit kit = new ReaderHtmlKit();
@@ -575,14 +605,41 @@ public class ReaderPanel extends JPanel {
         bookEditorPane.setText("<html><body>" + htmlFragment + "</body></html>");
         pageShownAt = System.nanoTime();
         var document = bookEditorPane.getDocument();
-        bookEditorPane.setCaretPosition(fromEnd ? document.getLength() : 0);
+        bookEditorPane.setCaretPosition(0);
         SwingUtilities.invokeLater(() -> {
-            if (bookEditorPane.getDocument() != document) return;
-            JScrollBar bar = editorScrollPane.getVerticalScrollBar();
-            int bottom = Math.max(0, bar.getMaximum() - bar.getVisibleAmount());
-            SmoothScrollUtil.resetScroll(editorScrollPane, fromEnd ? bottom : 0);
+            if (bookEditorPane.getDocument() == document) restoreScrollPosition(false);
         });
         updateStatusBar();
+    }
+
+    private void restoreScrollPosition(boolean layoutSettled) {
+        if (pendingScrollOffset == null) return;
+        JScrollBar bar = editorScrollPane.getVerticalScrollBar();
+        if (bar.getVisibleAmount() <= 0 || editorScrollPane.getViewport().getHeight() <= 0) return;
+
+        int bottom = Math.max(0, bar.getMaximum() - bar.getVisibleAmount());
+        int requested = pendingScrollOffset;
+        boolean waitForLayout = requested == SCROLL_TO_END ? bottom == 0 : requested > bottom;
+        if (!layoutSettled && waitForLayout) {
+            if (!restoreScrollTimer.isRunning()) restoreScrollTimer.start();
+            return;
+        }
+
+        restoreScrollTimer.stop();
+        SmoothScrollUtil.resetScroll(editorScrollPane, requested == SCROLL_TO_END ? bottom : Math.min(bottom, requested));
+        pendingScrollOffset = null;
+        recordScrollPosition();
+    }
+
+    private void recordScrollPosition() {
+        if (disposed || currentBook == null || currentContent == null) return;
+        JScrollBar bar = editorScrollPane.getVerticalScrollBar();
+        if (bar.getVisibleAmount() <= 0 || editorScrollPane.getViewport().getHeight() <= 0) return;
+        int offset = bar.getValue();
+        if (currentBook.getScrollOffset() != offset) {
+            currentBook.setScrollOffset(offset);
+            saveScrollTimer.restart();
+        }
     }
 
     private String injectSavedHighlightsAndSearch(String html) {
@@ -597,8 +654,7 @@ public class ReaderPanel extends JPanel {
         if (settings.getReadingMode() == ReaderSettings.ReadingMode.PAGED) {
             if (currentPageIndex + 1 < currentChapterPages.size()) {
                 currentPageIndex++;
-                renderCurrentViewport();
-                saveReadingProgress();
+                showPageAt(0);
             } else if (currentChapterIndex + 1 < currentContent.getChapters().size()) {
                 goToChapterAndPage(currentChapterIndex + 1, 0);
             }
@@ -622,8 +678,7 @@ public class ReaderPanel extends JPanel {
         if (settings.getReadingMode() == ReaderSettings.ReadingMode.PAGED) {
             if (currentPageIndex > 0) {
                 currentPageIndex--;
-                renderCurrentViewport();
-                saveReadingProgress();
+                showPageAt(0);
             } else if (currentChapterIndex > 0) {
                 int prevChap = currentChapterIndex - 1;
                 List<String> prevPages = PaginationEngine.paginateChapter(
@@ -640,12 +695,13 @@ public class ReaderPanel extends JPanel {
                 vBar.setValue(Math.max(0, prevVal));
                 saveReadingProgress();
             } else if (currentChapterIndex > 0) {
-                goToChapterAndPage(currentChapterIndex - 1, 0, true);
+                goToChapterAndPage(currentChapterIndex - 1, 0, SCROLL_TO_END);
             }
         }
     }
 
     private void saveReadingProgress() {
+        saveScrollTimer.stop();
         if (currentBook == null || currentContent == null || currentContent.getChapters().isEmpty()) return;
         int totalChapters = currentContent.getChapters().size();
         double chapterWeight = 100.0 / totalChapters;
@@ -721,7 +777,7 @@ public class ReaderPanel extends JPanel {
         int scaledChars = Math.max(900, Math.min(4500, (int) (2400.0 * 19.0 / s.getFontSize())));
         s.setCharsPerPage(scaledChars);
         UiPersistenceErrors.save(this, "Не удалось сохранить размер шрифта.", storageService::saveState);
-        goToChapterAndPage(currentChapterIndex, currentPageIndex);
+        refreshReadingLayout();
     }
 
     private void toggleAutoScroll() {
@@ -755,7 +811,7 @@ public class ReaderPanel extends JPanel {
         } else {
             if (currentPageIndex + 1 < currentChapterPages.size()) {
                 currentPageIndex++;
-                renderCurrentViewport();
+                showPageAt(0);
             } else if (currentChapterIndex + 1 < currentContent.getChapters().size()) {
                 goToChapterAndPage(currentChapterIndex + 1, 0);
             } else {
@@ -935,10 +991,17 @@ public class ReaderPanel extends JPanel {
         ReaderTypographyDialog.show(this, storageService.getSettings(), currentTheme, theme -> {
             currentTheme = theme;
             onThemeChangedGlobal.onThemeChanged(theme);
-        }, storageService::saveState, () -> goToChapterAndPage(currentChapterIndex, currentPageIndex));
+        }, storageService::saveState, this::refreshReadingLayout);
+    }
+
+    private void refreshReadingLayout() {
+        if (currentBook == null || currentContent == null) return;
+        boolean sameMode = chapterReadingMode == storageService.getSettings().getReadingMode();
+        goToChapterAndPage(currentChapterIndex, currentPageIndex, sameMode ? currentBook.getScrollOffset() : 0);
     }
 
     public void stopActiveFeatures() {
+        if (saveScrollTimer.isRunning()) saveReadingProgress();
         bookLoader.cancel();
         dictionaryLookup.cancel();
         if (autoScrollActive) {
@@ -950,10 +1013,14 @@ public class ReaderPanel extends JPanel {
     }
 
     public void disposeResources() {
+        if (disposed) return;
         stopActiveFeatures();
+        disposed = true;
         bookLoader.close();
         dictionaryLookup.close();
         readingTimeTrackerTimer.stop();
+        restoreScrollTimer.stop();
+        pendingScrollOffset = null;
     }
 
     public void applyTheme(ThemePalette theme) {
