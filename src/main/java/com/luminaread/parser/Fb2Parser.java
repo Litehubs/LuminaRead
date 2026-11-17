@@ -110,17 +110,18 @@ public class Fb2Parser implements BookParser {
 
         BookContent content = new BookContent();
 
-        Map<String, String> imageUriById = extractAndCacheImages(xml, file, content);
+        Map<String, String> imageUriById = extractAndCacheImages(xml, content);
 
         xml = stripScriptsStylesAndBinaries(xml);
 
         List<Chapter> chapters = new ArrayList<>();
-        StringBuilder fullTextBuilder = new StringBuilder();
 
         Pattern bodyPattern = Pattern.compile("<body[^>]*>(.*?)</body>",
                 Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
         Matcher bodyMatcher = bodyPattern.matcher(xml);
-        String bodyContent = bodyMatcher.find() ? bodyMatcher.group(1) : xml;
+        List<String> bodies = new ArrayList<>();
+        while (bodyMatcher.find()) bodies.add(bodyMatcher.group(1));
+        String bodyContent = bodies.isEmpty() ? xml : String.join("\n", bodies);
 
         int index = 0;
         for (String sectionXml : topLevelSections(bodyContent)) {
@@ -128,12 +129,11 @@ public class Fb2Parser implements BookParser {
             String html = fb2SectionToHtml(sectionXml, imageUriById);
             String text = cleanFb2MarkupToText(sectionXml);
             boolean hasImg = html.toLowerCase(Locale.ROOT).contains("<img");
-            if (text.trim().length() > 20 || hasImg) {
+            if (!text.isBlank() || hasImg) {
                 if (text.isBlank() && hasImg) {
                     text = "[" + title + " — Иллюстрация]";
                 }
                 chapters.add(new Chapter(index, title, html, text));
-                fullTextBuilder.append(title).append("\n\n").append(text).append("\n\n");
                 index++;
             }
         }
@@ -149,7 +149,6 @@ public class Fb2Parser implements BookParser {
                 fallbackText = "Иллюстрация";
             }
             chapters.add(new Chapter(0, bookTitle, fallbackHtml, fallbackText));
-            fullTextBuilder.append(fallbackText);
         }
 
         for (Chapter ch : chapters) {
@@ -166,21 +165,26 @@ public class Fb2Parser implements BookParser {
                 Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(body);
         int depth = 0;
         int start = -1;
+        int consumed = 0;
         while (tags.find()) {
             if (tags.group(1) == null) continue;
             if (tags.group(1).isEmpty() && tags.group().matches("(?s).*/\\s*>")) continue;
             if (tags.group(1).isEmpty()) {
-                if (depth++ == 0) start = tags.end();
+                if (depth++ == 0) {
+                    if (tags.start() > consumed) sections.add(body.substring(consumed, tags.start()));
+                    start = tags.end();
+                }
             } else if (depth > 0 && --depth == 0) {
                 sections.add(body.substring(start, tags.start()));
+                consumed = tags.end();
             }
         }
+        if (consumed < body.length()) sections.add(body.substring(depth > 0 ? start : consumed));
         return sections;
     }
 
-    private Map<String, String> extractAndCacheImages(String xml, File file, BookContent content) {
+    private Map<String, String> extractAndCacheImages(String xml, BookContent content) throws IOException {
         Map<String, String> uriById = new HashMap<>();
-        Path cacheDir = getFb2ImageCacheDir(file.getName());
         Matcher m = BINARY_PATTERN.matcher(xml);
         boolean coverFound = content.getCoverImage() != null;
         byte[] firstImage = null;
@@ -211,21 +215,8 @@ public class Fb2Parser implements BookParser {
                 coverFound = true;
             }
             content.putEmbeddedImage(id, imgBytes);
-            if (cacheDir != null) {
-                try {
-                    String ext = extForType(type, id);
-                    String safe = id.replaceAll("[^a-zA-Z0-9._\\-]", "_");
-                    if (!safe.toLowerCase(Locale.ROOT).endsWith(ext)) {
-                        safe = safe + ext;
-                    }
-                    Path target = cacheDir.resolve(safe);
-                    Files.write(target, imgBytes);
-                    uriById.put(id, target.toUri().toString());
-                } catch (Exception ex) {
-                    java.util.logging.Logger.getLogger(Fb2Parser.class.getName())
-                            .log(java.util.logging.Level.WARNING, "Не удалось сохранить изображение книги", ex);
-                }
-            }
+            Path target = BookImages.save(imgBytes, extForType(type, id));
+            uriById.put(id, target.toUri().toString());
         }
         if (!coverFound && firstImage != null) {
             content.setCoverImage(firstImage);
@@ -249,19 +240,6 @@ public class Fb2Parser implements BookParser {
             if (low.endsWith(e)) return e;
         }
         return ".jpg";
-    }
-
-    private Path getFb2ImageCacheDir(String fileName) {
-        try {
-            String safeBook = fileName.replaceAll("[^a-zA-Z0-9._\\-]", "_");
-            Path dir = Path.of(System.getProperty("user.home"), ".luminaread", "cache", "fb2_" + safeBook);
-            Files.createDirectories(dir);
-            return dir;
-        } catch (Exception e) {
-            java.util.logging.Logger.getLogger(Fb2Parser.class.getName())
-                    .log(java.util.logging.Level.WARNING, "Не удалось создать кэш изображений FB2", e);
-            return null;
-        }
     }
 
     private String fb2SectionToHtml(String sectionXml, Map<String, String> imageUriById) {

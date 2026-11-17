@@ -92,83 +92,89 @@ public class TtsService implements ITtsService {
     }
 
     @Override
-    public synchronized void speakText(String text, int rateWpm, int sleepMinutes, Runnable onStop) {
-        stop();
-        if (text == null || text.isBlank()) {
-            return;
-        }
-        this.onStopCallback = onStop;
-        this.speaking = true;
-        final long generation = playbackGeneration;
-
-        String cleanText = text.replaceAll("[\\r\\n]+", " ")
-                .trim();
-        if (cleanText.length() > 6000) {
-            cleanText = cleanText.substring(0, 6000);
-        }
-
-        final String textToSpeak = cleanText;
-        Thread ttsThread = new Thread(() -> {
-            try {
-                ProcessBuilder pb = createProcessBuilder(textToSpeak, rateWpm);
-                Process process;
-                synchronized (TtsService.this) {
-                    if (!speaking || generation != playbackGeneration) return;
-                    process = pb.start();
-                    activeProcess = process;
+    public void speakText(String text, int rateWpm, int sleepMinutes, Runnable onStop) {
+        Runnable previous;
+        synchronized (this) {
+            previous = stopLocked();
+            if (text != null && !text.isBlank()) {
+                onStopCallback = onStop;
+                speaking = true;
+                long generation = playbackGeneration;
+                String cleanText = text.replaceAll("[\\r\\n]+", " ").trim();
+                String spokenText = cleanText.substring(0, Math.min(6000, cleanText.length()));
+                Thread worker = new Thread(() -> play(spokenText, rateWpm, generation), "LuminaRead-TTS");
+                worker.setDaemon(true);
+                worker.start();
+                if (sleepMinutes > 0) {
+                    sleepTimer = new Timer("LuminaRead-SleepTimer", true);
+                    sleepTimer.schedule(new TimerTask() {
+                        @Override public void run() { stopGeneration(generation); }
+                    }, sleepMinutes * 60_000L);
                 }
-                process.waitFor();
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-            } catch (Exception ex) {
-                java.util.logging.Logger.getLogger(TtsService.class.getName())
-                        .log(java.util.logging.Level.WARNING, "Не удалось запустить озвучивание", ex);
-            } finally {
-                Runnable callback = null;
-                synchronized (TtsService.this) {
-                    if (generation == playbackGeneration) {
-                        speaking = false;
-                        activeProcess = null;
-                        if (sleepTimer != null) { sleepTimer.cancel(); sleepTimer = null; }
-                        callback = onStopCallback;
-                        onStopCallback = null;
-                    }
-                }
-                if (callback != null) callback.run();
             }
-        }, "LuminaRead-TTS-Thread");
-        ttsThread.setDaemon(true);
-        ttsThread.start();
+        }
+        notifyStopped(previous);
+    }
 
-        if (sleepMinutes > 0) {
-            sleepTimer = new Timer("LuminaRead-SleepTimer", true);
-            sleepTimer.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    synchronized (TtsService.this) {
-                        if (generation == playbackGeneration) stop();
-                    }
-                }
-            }, sleepMinutes * 60_000L);
+    private void play(String text, int rateWpm, long generation) {
+        try {
+            ProcessBuilder builder = createProcessBuilder(text, rateWpm);
+            Process process;
+            synchronized (this) {
+                if (!speaking || generation != playbackGeneration) return;
+                process = builder.start();
+                activeProcess = process;
+            }
+            process.waitFor();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(TtsService.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Не удалось запустить озвучивание", ex);
+        } finally {
+            stopGeneration(generation);
         }
     }
 
+    private void stopGeneration(long generation) {
+        Runnable callback;
+        synchronized (this) {
+            callback = generation == playbackGeneration ? stopLocked() : null;
+        }
+        notifyStopped(callback);
+    }
+
     @Override
-    public synchronized void stop() {
+    public void stop() {
+        Runnable callback;
+        synchronized (this) { callback = stopLocked(); }
+        notifyStopped(callback);
+    }
+
+    /** Caller owns this service's monitor; callbacks are always invoked after releasing it. */
+    private Runnable stopLocked() {
         playbackGeneration++;
         speaking = false;
         if (sleepTimer != null) {
             sleepTimer.cancel();
             sleepTimer = null;
         }
-        if (activeProcess != null && activeProcess.isAlive()) {
-            activeProcess.destroyForcibly();
+        if (activeProcess != null) {
+            if (activeProcess.isAlive()) activeProcess.destroyForcibly();
             activeProcess = null;
         }
-        if (onStopCallback != null) {
-            Runnable cb = onStopCallback;
-            onStopCallback = null;
-            cb.run();
+        Runnable callback = onStopCallback;
+        onStopCallback = null;
+        return callback;
+    }
+
+    private static void notifyStopped(Runnable callback) {
+        if (callback == null) return;
+        try {
+            callback.run();
+        } catch (RuntimeException ex) {
+            java.util.logging.Logger.getLogger(TtsService.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Не удалось обновить состояние озвучивания", ex);
         }
     }
 

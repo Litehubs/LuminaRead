@@ -1,5 +1,7 @@
 package com.luminaread.service.manga;
 
+import com.luminaread.util.BoundedInput;
+
 import com.luminaread.model.manga.MangaItem;
 import com.luminaread.util.Json;
 import com.luminaread.util.AtomicFile;
@@ -74,7 +76,7 @@ public class MangaStateRepository {
             if (lastReadChapterMap != null) {
                 for (Map.Entry<String, String> e : lastReadChapterMap.entrySet()) {
                     if (i++ > 0) sb.append(",\n");
-                    sb.append("    ").append(quote(e.getKey())).append(": ").append(quote(e.getValue()));
+                    sb.append("    ").append(Json.quote(e.getKey())).append(": ").append(Json.quote(e.getValue()));
                 }
             }
             sb.append("\n  }");
@@ -84,7 +86,7 @@ public class MangaStateRepository {
                 i = 0;
                 for (Map.Entry<String, String> e : readerPrefs.entrySet()) {
                     if (i++ > 0) sb.append(",\n");
-                    sb.append("    ").append(quote(e.getKey())).append(": ").append(quote(e.getValue()));
+                    sb.append("    ").append(Json.quote(e.getKey())).append(": ").append(Json.quote(e.getValue()));
                 }
                 sb.append("\n  }\n");
             } else {
@@ -106,7 +108,7 @@ public class MangaStateRepository {
         try {
             Path path = getStateFilePath();
             if (!Files.exists(path)) return;
-            String text = Files.readString(path, StandardCharsets.UTF_8);
+            String text = new String(BoundedInput.read(path, 32 * 1024 * 1024), StandardCharsets.UTF_8);
             Object root = Json.parse(text);
             if (!(root instanceof Map)) throw new IllegalArgumentException("Ожидался объект JSON");
             Map<?, ?> map = (Map<?, ?>) root;
@@ -151,14 +153,14 @@ public class MangaStateRepository {
     }
 
     private static String itemToJson(MangaItem item) {
-        return "{\"id\":" + quote(item.id) +
-                ",\"title\":" + quote(item.title) +
-                ",\"rusTitle\":" + quote(item.rusTitle) +
-                ",\"description\":" + quote(item.description) +
-                ",\"coverUrl\":" + quote(item.coverUrl) +
-                ",\"source\":" + quote(item.source) +
-                ",\"status\":" + quote(item.status) +
-                ",\"rating\":" + quote(item.rating) + "}";
+        return "{\"id\":" + Json.quote(item.id) +
+                ",\"title\":" + Json.quote(item.title) +
+                ",\"rusTitle\":" + Json.quote(item.rusTitle) +
+                ",\"description\":" + Json.quote(item.description) +
+                ",\"coverUrl\":" + Json.quote(item.coverUrl) +
+                ",\"source\":" + Json.quote(item.source) +
+                ",\"status\":" + Json.quote(item.status) +
+                ",\"rating\":" + Json.quote(item.rating) + "}";
     }
 
     private static MangaItem itemFromJson(Object obj) {
@@ -176,20 +178,7 @@ public class MangaStateRepository {
         );
     }
 
-    private static String quote(String s) {
-        if (s == null) return "\"\"";
-        StringBuilder sb = new StringBuilder("\"");
-        for (char c : s.toCharArray()) {
-            if (c == '"') sb.append("\\\"");
-            else if (c == '\\') sb.append("\\\\");
-            else if (c == '\n') sb.append("\\n");
-            else if (c == '\r') sb.append("\\r");
-            else if (c == '\t') sb.append("\\t");
-            else sb.append(c);
-        }
-        sb.append("\"");
-        return sb.toString();
-    }
+
 
     private static String str(Object o) {
         return o == null ? "" : o.toString();

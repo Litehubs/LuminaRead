@@ -14,6 +14,8 @@ import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import com.luminaread.util.Json;
+import com.luminaread.util.BoundedHttpBody;
+import com.luminaread.util.HttpRequests;
 
 public class DictionaryService implements IDictionaryService {
     private static final Logger LOG = Logger.getLogger(DictionaryService.class.getName());
@@ -29,8 +31,9 @@ public class DictionaryService implements IDictionaryService {
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(8)).build();
         this.transport = request -> {
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            return new Response(response.statusCode(), response.body());
+            HttpResponse<byte[]> response = HttpRequests.send(client, request,
+                    BoundedHttpBody.bounded(1024 * 1024, "Ответ словаря слишком большой."));
+            return new Response(response.statusCode(), new String(response.body(), StandardCharsets.UTF_8));
         };
     }
 

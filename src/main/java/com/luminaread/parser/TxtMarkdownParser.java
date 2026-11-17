@@ -1,5 +1,7 @@
 package com.luminaread.parser;
 
+import com.luminaread.util.BoundedInput;
+
 import com.luminaread.model.BookContent;
 import com.luminaread.model.Chapter;
 import com.luminaread.util.CharsetDetector;
@@ -49,7 +51,7 @@ public class TxtMarkdownParser implements BookParser {
 
     @Override
     public BookContent parse(File file) throws Exception {
-        byte[] bytes = Files.readAllBytes(file.toPath());
+        byte[] bytes = BoundedInput.read(file.toPath(), 64 * 1024 * 1024);
         String rawText = CharsetDetector.decodeBytes(bytes);
         String lowerName = file.getName().toLowerCase(Locale.ROOT);
 

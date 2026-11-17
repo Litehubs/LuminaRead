@@ -2,6 +2,7 @@ package com.luminaread.service.catalog;
 
 import com.luminaread.model.OnlineBookItem;
 import com.luminaread.util.CharsetDetector;
+import com.luminaread.util.BoundedInput;
 import com.luminaread.util.HtmlSanitizer;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -38,7 +39,7 @@ public class OpdsFeedParser {
             return Collections.emptyList();
         }
         try {
-            byte[] bytes = inputStream.readAllBytes();
+            byte[] bytes = BoundedInput.read(inputStream, 4 * 1024 * 1024);
             return parse(bytes, baseUrl, sourceLabel);
         } catch (Exception e) {
             java.util.logging.Logger.getLogger(OpdsFeedParser.class.getName())

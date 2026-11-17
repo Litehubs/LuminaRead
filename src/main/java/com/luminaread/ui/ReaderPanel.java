@@ -337,7 +337,7 @@ public class ReaderPanel extends JPanel {
         bottomStatusBar = new JPanel(new BorderLayout(12, 0));
         bottomStatusBar.setBorder(BorderFactory.createEmptyBorder(6, 18, 6, 18));
 
-        statusLeftLabel = new JLabel("Книга не открыта");
+        statusLeftLabel = ModernUiFactory.plainTextLabel("Книга не открыта");
         statusLeftLabel.setFont(ModernUiFactory.uiFont(Font.PLAIN, 12));
 
         statusRightLabel = new JLabel("0%");
@@ -630,6 +630,8 @@ public class ReaderPanel extends JPanel {
         SmoothScrollUtil.resetScroll(editorScrollPane, requested == SCROLL_TO_END ? bottom : Math.min(bottom, requested));
         pendingScrollOffset = null;
         recordScrollPosition();
+        // The scroll range is now known, even when restoring offset zero did not move the bar.
+        saveScrollTimer.restart();
     }
 
     private void recordScrollPosition() {
@@ -714,11 +716,18 @@ public class ReaderPanel extends JPanel {
         double withinChapterRatio = currentChapterPages.size() <= 1
                 ? 1.0
                 : (double) (currentPageIndex + 1) / currentChapterPages.size();
+        boolean scrolling = storageService.getSettings().getReadingMode() == ReaderSettings.ReadingMode.SCROLL;
+        if (scrolling) {
+            JScrollBar bar = editorScrollPane.getVerticalScrollBar();
+            int range = bar.getMaximum() - bar.getMinimum() - bar.getVisibleAmount();
+            withinChapterRatio = range > 0 ? (double) (bar.getValue() - bar.getMinimum()) / range : 1.0;
+        }
         double progress = (currentChapterIndex * chapterWeight) + (withinChapterRatio * chapterWeight);
 
         currentBook.setCurrentChapterIndex(currentChapterIndex);
         currentBook.setCurrentPageInChapter(currentPageIndex);
-        currentBook.setProgressPercent(progress);
+        // During layout the scrollbar still belongs to the previous page.
+        if (!scrolling || pendingScrollOffset == null) currentBook.setProgressPercent(progress);
         updateStatusBar();
         try {
             storageService.saveState();

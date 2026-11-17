@@ -2,6 +2,7 @@ package com.luminaread.service;
 
 import javax.imageio.ImageIO;
 import com.luminaread.util.ImageSizeGuard;
+import com.luminaread.util.TimedInput;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.RenderingHints;
@@ -308,7 +309,7 @@ public class MediaCacheService implements IMediaCacheService {
                 if (conn.getContentLengthLong() > maxImageBytes) {
                     throw new java.io.IOException("Image response exceeds size limit");
                 }
-                try (InputStream is = conn.getInputStream();
+                try (InputStream is = new TimedInput(conn.getInputStream(), java.time.Duration.ofSeconds(30));
                      ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                     byte[] buf = new byte[8192];
                     int r;

@@ -1,14 +1,13 @@
 package com.luminaread.service.manga;
 
+import com.luminaread.util.HttpText;
+
 import com.luminaread.model.manga.MangaChapter;
 import com.luminaread.model.manga.MangaItem;
 import com.luminaread.util.HtmlSanitizer;
 import com.luminaread.util.Json;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
@@ -205,9 +204,8 @@ public class MangaLibClient {
     }
 
     private void ensureServersDiscovered() {
-        if (serversDiscovered.get()) return;
-        serversDiscovered.set(true);
-        new Thread(() -> {
+        if (!serversDiscovered.compareAndSet(false, true)) return;
+        Thread discovery = new Thread(() -> {
             try {
                 String json = httpGetWithFailover("/constants?fields[]=imageServers", true);
                 Object root = Json.parse(json);
@@ -247,7 +245,9 @@ public class MangaLibClient {
                 java.util.logging.Logger.getLogger(MangaLibClient.class.getName())
                         .log(java.util.logging.Level.FINE, "Не удалось обнаружить дополнительный сервер изображений", ex);
             }
-        }, "MangaLibServerDiscovery").start();
+        }, "MangaLibServerDiscovery");
+        discovery.setDaemon(true);
+        discovery.start();
     }
 
     private String httpGetWithFailover(String path, boolean siteScoped) throws IOException {
@@ -278,17 +278,7 @@ public class MangaLibClient {
         conn.setConnectTimeout(8000);
         conn.setReadTimeout(20000);
 
-        int code = conn.getResponseCode();
-        InputStream is = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
-        if (is == null) throw new IOException("HTTP error: " + code);
-
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) sb.append(line);
-            if (code >= 400) throw new IOException("HTTP " + code + ": " + sb);
-            return sb.toString();
-        }
+        return HttpText.read(conn);
     }
 
     private static String extractCover(Object coverObj) {

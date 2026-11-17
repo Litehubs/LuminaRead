@@ -52,53 +52,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.DoubleConsumer;
 
 /**
- * Standalone structural and service-contract checks for LuminaRead.
+ * Checks specific service contracts and extension points. These tests do not prove SOLID compliance.
  */
-public class MasterSolidComplianceTest {
+class ServiceContractTest {
 
-    private static int testsRun = 0;
-    private static int testsPassed = 0;
-
-    public static void main(String[] args) {
-        System.out.println("================================================================================");
-        System.out.println("        LUMINASOFT / LUMINAREAD MASTER SOLID COMPLIANCE VERIFICATION SUITE       ");
-        System.out.println("================================================================================");
-
-        runTest("Injected collaborators", MasterSolidComplianceTest::verifySrp);
-        runTest("Open/Closed Principle (OCP) Verification", MasterSolidComplianceTest::verifyOcp);
-        runTest("Liskov Substitution Principle (LSP) Verification", MasterSolidComplianceTest::verifyLsp);
-        runTest("Interface Segregation Principle (ISP) Verification", MasterSolidComplianceTest::verifyIsp);
-        runTest("Dependency Inversion Principle (DIP) Verification", MasterSolidComplianceTest::verifyDip);
-        runTest("UI Backward Compatibility & Non-Breaking Overloads", MasterSolidComplianceTest::verifyUiBackwardCompatibility);
-        runTest("Domain Model Encapsulation & Immutability", MasterSolidComplianceTest::verifyDomainModelIntegrity);
-
-        System.out.println("================================================================================");
-        System.out.println(String.format("VERIFICATION SUMMARY: %d / %d tests passed successfully.", testsPassed, testsRun));
-        System.out.println("================================================================================");
-
-        if (testsPassed != testsRun) {
-            System.exit(1);
-        }
-    }
-
-    private static void runTest(String name, TestRunnable runnable) {
-        testsRun++;
-        System.out.print(String.format("[%d] %-65s ", testsRun, name));
-        try {
-            runnable.run();
-            testsPassed++;
-            System.out.println("[PASS]");
-        } catch (Throwable t) {
-            System.out.println("[FAIL]");
-            System.err.println("  -> Error: " + t.getMessage());
-            t.printStackTrace(System.err);
-        }
-    }
-
-    @FunctionalInterface
-    interface TestRunnable {
-        void run() throws Throwable;
-    }
+    @org.junit.jupiter.api.Test void injectedCollaborators() throws Exception { verifySrp(); }
+    @org.junit.jupiter.api.Test void extensionPoints() throws Exception { verifyOcp(); }
+    @org.junit.jupiter.api.Test void implementationContracts() throws Exception { verifyLsp(); }
+    @org.junit.jupiter.api.Test void focusedInterfaces() { verifyIsp(); }
+    @org.junit.jupiter.api.Test void injectedInterfaces() throws Exception { verifyDip(); }
+    @org.junit.jupiter.api.Test void compatibility() throws Exception { verifyUiBackwardCompatibility(); }
+    @org.junit.jupiter.api.Test void domainDefaults() { verifyDomainModelIntegrity(); }
 
     private static void require(boolean condition, String message) {
         if (!condition) {
