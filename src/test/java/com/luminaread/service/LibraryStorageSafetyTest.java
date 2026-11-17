@@ -17,6 +17,28 @@ import static org.junit.jupiter.api.Assertions.*;
 class LibraryStorageSafetyTest {
     @TempDir Path home;
 
+    @Test void openingChecksTheSourceBeforeReusingParsedText() throws Exception {
+        var storage = new LibraryStorageService(home);
+        Path original = Files.writeString(home.resolve("chapter.txt"), "Alpha in the original source.");
+        var book = storage.importBookFile(original.toFile(), false);
+        var initial = storage.loadBookContent(book);
+        assertSame(initial, storage.loadBookContent(book));
+
+        Path replacement = Files.writeString(home.resolve("replacement.txt"), "Bravo in the updated source.");
+        Files.move(replacement, original, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        Files.setLastModifiedTime(original, java.nio.file.attribute.FileTime.fromMillis(1234567890000L));
+        var updated = storage.loadBookContent(book);
+        assertNotSame(initial, updated);
+        assertTrue(updated.getChapters().get(0).getPlainText().contains("Bravo"));
+
+        Path moved = Files.move(original, home.resolve("moved.txt"));
+        assertThrows(IOException.class, () -> storage.loadBookContent(book));
+        var reimported = storage.importBookFile(moved.toFile(), false);
+        assertTrue(storage.loadBookContent(reimported).getChapters().get(0).getPlainText().contains("Bravo"));
+        Files.delete(moved);
+        assertThrows(IOException.class, () -> storage.loadBookContent(reimported));
+    }
+
     @Test void failedReplacementPreservesOriginal() throws Exception {
         Path file = home.resolve("state");
         Files.writeString(file, "original");
@@ -182,7 +204,10 @@ class LibraryStorageSafetyTest {
         Path exported = home.resolve("notes.md");
         Files.writeString(exported, "old contents");
         storage.exportNotesAndHighlightsToMarkdown(exported.toFile());
-        assertTrue(Files.readString(exported).contains("Выделенные цитаты и заметки (1)"));
+        String markdown = Files.readString(exported);
+        assertTrue(markdown.contains("Выделенные цитаты и заметки (1)"));
+        assertFalse(markdown.contains("<img"));
+        assertTrue(markdown.contains("&lt;img"));
     }
 
     private static int countEscapedAnnotationLabels(java.awt.Container container) {

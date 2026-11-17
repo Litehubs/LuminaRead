@@ -23,6 +23,20 @@ final class DownloadJobs implements AutoCloseable {
         workers.submit(() -> !closed, () -> catalog.downloadAndImportBook(task, library, null), success, failure);
     }
 
+    void recover(Runnable success, Consumer<Throwable> failure) {
+        workers.submit(() -> !closed, () -> {
+            catalog.recoverDownloads(library);
+            return null;
+        }, ignored -> success.run(), failure);
+    }
+
+    void clear(Consumer<Throwable> failure) {
+        workers.submit(() -> !closed, () -> {
+            catalog.clearLibraryDownloads(library);
+            return null;
+        }, ignored -> {}, failure);
+    }
+
     @Override
     public void close() {
         closed = true;

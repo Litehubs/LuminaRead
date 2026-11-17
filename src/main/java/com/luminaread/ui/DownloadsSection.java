@@ -59,7 +59,8 @@ final class DownloadsSection extends JPanel {
         form.add(download);
 
         JButton clear = ModernUiFactory.createFlatButton("Очистить завершённые", theme);
-        clear.addActionListener(event -> catalog.clearCompletedTasks());
+        clear.addActionListener(event -> jobs.clear(
+                error -> UiPersistenceErrors.show(this, "Не удалось очистить список загрузок.", error)));
         form.add(clear);
 
         add(form);
@@ -156,6 +157,13 @@ final class DownloadsSection extends JPanel {
             JButton openBtn = ModernUiFactory.createPrimaryButton("Читать книгу", theme);
             openBtn.addActionListener(e -> openBook.accept(task.getImportedBook()));
             rightCol.add(openBtn);
+        } else if (task.getStatus() == DownloadTask.Status.FAILED && task.getSavedFile() != null) {
+            JButton retry = ModernUiFactory.createFlatButton("Повторить импорт", theme);
+            retry.addActionListener(event -> {
+                retry.setEnabled(false);
+                jobs.start(task, book -> refresh(), error -> refresh());
+            });
+            rightCol.add(retry);
         }
 
         row.add(leftCol, BorderLayout.CENTER);

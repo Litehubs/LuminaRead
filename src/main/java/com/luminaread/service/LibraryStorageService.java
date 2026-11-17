@@ -28,6 +28,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -100,11 +103,35 @@ public class LibraryStorageService {
         writeAsync(() -> {}).get();
     }
 
-    private final WeightedCache<String, BookContent> parsedBookCache =
+    private final WeightedCache<String, ParsedBook> parsedBookCache =
             new WeightedCache<>(8, 64L * 1024 * 1024);
 
-    private void cacheBook(Book book, BookContent content) {
-        parsedBookCache.put(book.getId(), content, content.estimatedBytes());
+    private record BookFile(Path path, long size, FileTime modified, FileTime created, Object key) {
+        static BookFile read(Path path) throws IOException {
+            Path absolute = path.toAbsolutePath();
+            var attrs = Files.readAttributes(absolute, BasicFileAttributes.class);
+            if (!attrs.isRegularFile()) throw new IOException("Путь книги не указывает на файл: " + absolute);
+            return new BookFile(absolute, attrs.size(), attrs.lastModifiedTime(), attrs.creationTime(), attrs.fileKey());
+        }
+    }
+
+    private record ParsedBook(BookFile file, String format, BookContent content) {
+        static ParsedBook read(BookFile source) throws Exception {
+            File file = source.path().toFile();
+            String format = BookParserFactory.detectFormatLabel(file);
+            BookContent content = BookParserFactory.parseBook(file);
+            return new ParsedBook(source, format, content);
+        }
+
+        void checkSource() throws IOException {
+            if (!file.equals(BookFile.read(file.path()))) {
+                throw new IOException("Файл книги изменился во время чтения. Откройте книгу снова.");
+            }
+        }
+    }
+
+    private void cacheBook(Book book, ParsedBook parsed) {
+        parsedBookCache.put(book.getId(), parsed, parsed.content().estimatedBytes());
     }
 
     public LibraryStorageService() {
@@ -310,23 +337,24 @@ public class LibraryStorageService {
             targetFile = dest.toFile();
         }
 
-        String format;
-        BookContent parsed;
+        ParsedBook document;
         try {
-            format = BookParserFactory.detectFormatLabel(targetFile);
-            parsed = BookParserFactory.parseBook(targetFile);
+            document = ParsedBook.read(BookFile.read(targetFile.toPath()));
         } catch (Exception ex) {
             if (copiedForImport) deleteAfterFailure(targetFile.toPath(), ex);
             throw ex;
         }
 
         String absPath = targetFile.getAbsolutePath();
+        BookContent parsed = document.content();
+        String format = document.format();
         synchronized (this) {
+            document.checkSource();
             for (Book existing : state.books) {
                 if (existing.getFilePath().equals(absPath)) {
                     ensureNonEmptyChapters(existing, targetFile, parsed);
                     updateMetadata(existing, format, parsed, true);
-                    cacheBook(existing, parsed);
+                    cacheBook(existing, document);
                     return existing;
                 }
             }
@@ -341,7 +369,7 @@ public class LibraryStorageService {
 
             changeList(state.books, () -> state.books.add(0, book));
             bookIds.add(book.getId());
-            cacheBook(book, parsed);
+            cacheBook(book, document);
             return book;
         }
     }
@@ -382,25 +410,27 @@ public class LibraryStorageService {
     }
 
     public BookContent loadBookContent(Book book) throws Exception {
-        synchronized (this) {
-            BookContent cached = parsedBookCache.get(book.getId());
-            if (cached != null && !cached.getChapters().isEmpty() && book.getTotalWords() > 0) {
-                return cached;
-            }
+        BookFile file;
+        try {
+            file = BookFile.read(Path.of(book.getFilePath()));
+        } catch (NoSuchFileException ex) {
+            parsedBookCache.remove(book.getId());
+            throw new IOException("Файл книги не найден по пути: " + book.getFilePath(), ex);
         }
-        File file = new File(book.getFilePath());
-        if (!file.exists()) {
-            throw new IllegalStateException("Файл книги не найден по пути: " + book.getFilePath());
-        }
-        String realFormat = BookParserFactory.detectFormatLabel(file);
-        BookContent parsed = BookParserFactory.parseBook(file);
-        ensureNonEmptyChapters(book, file, parsed);
+        ParsedBook cached = parsedBookCache.get(book.getId());
+        if (cached != null && cached.file().equals(file) && book.getTotalWords() > 0) return cached.content();
+
+        ParsedBook parsed = ParsedBook.read(file);
+        ensureNonEmptyChapters(book, file.path().toFile(), parsed.content());
 
         synchronized (this) {
-            if (bookIds.contains(book.getId())) updateMetadata(book, realFormat, parsed, false);
-            cacheBook(book, parsed);
+            parsed.checkSource();
+            if (bookIds.contains(book.getId())) {
+                updateMetadata(book, parsed.format(), parsed.content(), false);
+                cacheBook(book, parsed);
+            }
         }
-        return parsed;
+        return parsed.content();
     }
 
     private void updateMetadata(Book book, String format, BookContent parsed, boolean replaceCover) {
@@ -538,41 +568,9 @@ public class LibraryStorageService {
     }
 
     public void exportNotesAndHighlightsToMarkdown(File targetFile) throws Exception {
-        List<Highlight> highlights;
-        List<Bookmark> bookmarks;
-        synchronized (this) {
-            highlights = List.copyOf(state.highlights);
-            bookmarks = List.copyOf(state.bookmarks);
-        }
-        StringBuilder md = new StringBuilder();
-        md.append("# Экспорт цитат, заметок и закладок — LuminaRead\n\n");
-
-        md.append("## Выделенные цитаты и заметки (").append(highlights.size()).append(")\n\n");
-        if (highlights.isEmpty()) {
-            md.append("_Нет сохраненных цитат._\n\n");
-        } else {
-            for (Highlight h : highlights) {
-                md.append("### ").append(h.getBookTitle()).append(" — ").append(h.getChapterTitle()).append("\n");
-                md.append("> ").append(h.getSelectedText().replace("\n", "\n> ")).append("\n\n");
-                if (!h.getNote().isBlank()) {
-                    md.append("**Заметка:** ").append(h.getNote()).append("\n\n");
-                }
-                md.append("*Дата: ").append(h.getFormattedDate()).append("*\n\n");
-            }
-        }
-
-        md.append("## Закладки (").append(bookmarks.size()).append(")\n\n");
-        if (bookmarks.isEmpty()) {
-            md.append("_Нет сохраненных закладок._\n");
-        } else {
-            for (Bookmark bm : bookmarks) {
-                md.append("* **").append(bm.getBookTitle()).append("** (")
-                  .append(bm.getChapterTitle()).append(", стр. ").append(bm.getPageIndex() + 1)
-                  .append(") — ").append(bm.getLabel())
-                  .append(" _(").append(bm.getFormattedDate()).append(")_\n");
-            }
-        }
-        byte[] contents = md.toString().getBytes(StandardCharsets.UTF_8);
+        Shelf snapshot = shelf;
+        byte[] contents = NotesMarkdown.render(snapshot.highlights(), snapshot.bookmarks())
+                .getBytes(StandardCharsets.UTF_8);
         AtomicFile.write(targetFile.toPath(), output -> output.write(contents));
     }
 }

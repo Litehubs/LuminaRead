@@ -141,13 +141,13 @@ public class MainWindow extends JFrame {
             sidebarPanel.setVisible(sidebarVisible);
             sidebarPanel.revalidate();
             sidebarPanel.repaint();
-        }, new MangaService(), true);
+        }, new MangaService(), false);
 
         ranobePanel = new RanobePanel(sidebarVisible -> {
             sidebarPanel.setVisible(sidebarVisible);
             sidebarPanel.revalidate();
             sidebarPanel.repaint();
-        }, new RanobeService(), true);
+        }, new RanobeService(), false);
 
         contentCardsPanel.add(libraryPanel, VIEW_LIBRARY);
         contentCardsPanel.add(readerPanel, VIEW_READER);
@@ -208,6 +208,7 @@ public class MainWindow extends JFrame {
 
         applyGlobalTheme(currentTheme);
         updateAnimations();
+        onlineCatalogPanel.recoverDownloads(libraryPanel::refreshBooksGrid);
     }
 
     private void reopenAfterSaveError(Throwable error) {
@@ -323,6 +324,10 @@ public class MainWindow extends JFrame {
             statsAndNotesPanel.refreshData();
         } else if (VIEW_SETTINGS.equals(viewKey)) {
             settingsPanel.refreshDownloadsSection();
+        } else if (VIEW_MANGA.equals(viewKey)) {
+            mangaPanel.openCatalog();
+        } else if (VIEW_RANOBE.equals(viewKey)) {
+            ranobePanel.openCatalog();
         }
         sidebarPanel.setVisible(!VIEW_READER.equals(viewKey));
         viewCards.show(contentCardsPanel, viewKey);

@@ -102,6 +102,7 @@ public class RanobePanel extends JPanel {
     private final JLabel progressPctLabel = new JLabel("0%");
 
     private AutoScrollController autoScroll;
+    private boolean searchStarted;
     private ThemePalette currentTheme = ThemePalette.byId("NIGHT_AMOLED");
 
     RanobePanel(Consumer<Boolean> onToggleSidebar, IRanobeService ranobeService, boolean initialSearch) {
@@ -130,7 +131,11 @@ public class RanobePanel extends JPanel {
         yandexService.addListener(authListener);
         updateAuthButtonState();
 
-        if (initialSearch) performSearch("");
+        if (initialSearch) openCatalog();
+    }
+
+    void openCatalog() {
+        if (!searchStarted) performSearch("");
     }
 
     void useTransitionSurface(MotionSurface surface) {
@@ -253,6 +258,7 @@ public class RanobePanel extends JPanel {
 
     private void performSearch(String query) {
         if (disposed) return;
+        searchStarted = true;
         final long request = searchRequests.next();
         statusLabel.setText("⏳ Поиск ранобэ и новелл в RanobeLib...");
         gridContainer.removeAll();

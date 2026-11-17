@@ -101,7 +101,9 @@ class OnlineCatalogFailureTest {
     @Test void failedImportLeavesTheDownloadedFileAndReportsTheRightStage(
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path home) throws Exception {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        var requests = new java.util.concurrent.atomic.AtomicInteger();
         server.createContext("/book.txt", exchange -> {
+            requests.incrementAndGet();
             byte[] body = "A normal line in a book. ".repeat(10).getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
             try (var output = exchange.getResponseBody()) { output.write(body); }
@@ -126,6 +128,22 @@ class OnlineCatalogFailureTest {
             assertTrue(task.getErrorMessage().contains("Файл скачан"));
             assertTrue(task.getSavedFile().isFile());
             assertNull(task.getImportedBook());
+
+            var reopened = new LibraryStorageService(home);
+            var restarted = new OnlineCatalogService();
+            restarted.recoverDownloads(reopened);
+            assertEquals(1, requests.get(), "Recovery must reuse the downloaded file");
+            assertEquals(1, reopened.getAllBooks().size());
+            var recovered = restarted.getDownloadTasks().get(0);
+            assertEquals(task.getId(), recovered.getId());
+            assertEquals(com.luminaread.model.DownloadTask.Status.COMPLETED, recovered.getStatus());
+            assertEquals(task.getSavedFile().getAbsolutePath(), recovered.getImportedBook().getFilePath());
+
+            restarted.clearLibraryDownloads(reopened);
+            var afterClear = new OnlineCatalogService();
+            afterClear.recoverDownloads(new LibraryStorageService(home));
+            assertTrue(afterClear.getDownloadTasks().isEmpty());
+            assertTrue(task.getSavedFile().isFile(), "Clearing history must keep the downloaded book");
 
             var success = catalog.createLibraryDownload("other book", "TXT", url);
             assertNotNull(catalog.downloadAndImportBook(success, new LibraryStorageService(home), null));

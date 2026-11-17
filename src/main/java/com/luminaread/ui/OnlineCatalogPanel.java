@@ -352,6 +352,11 @@ public class OnlineCatalogPanel extends JPanel {
         downloadProgressBar.setVisible(task.getStatus() != DownloadTask.Status.FAILED);
     }
 
+    void recoverDownloads(Runnable onRecovered) {
+        downloadJobs.recover(onRecovered,
+                error -> UiPersistenceErrors.show(this, "Не удалось восстановить очередь загрузок.", error));
+    }
+
     void disposeResources() {
         if (disposed) return;
         disposed = true;
