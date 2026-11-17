@@ -134,7 +134,8 @@ public final class RegressionSmokeTest {
             SwingUtilities.invokeAndWait(() -> loaded.set(hasLoadedContent(panel[0])));
             if (!loaded.get()) Thread.sleep(20);
         }
-        SwingUtilities.invokeAndWait(panel[0]::stopActiveFeatures);
+        SwingUtilities.invokeAndWait(panel[0]::disposeResources);
+        storage.flushProgress();
         require(loaded.get(), "The reader background load should eventually complete");
     }
 

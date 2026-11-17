@@ -12,6 +12,7 @@ import com.luminaread.model.ReaderSettings;
 import com.luminaread.parser.BookParserFactory;
 import com.luminaread.util.AtomicFile;
 import com.luminaread.util.HtmlSanitizer;
+import com.luminaread.util.WeightedCache;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -29,10 +30,8 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -76,14 +75,22 @@ public class LibraryStorageService {
     private final Path booksDir;
     private final Path stateFile;
     private final SettingsJsonRepository settingsJsonRepository = new SettingsJsonRepository();
+    private final ProgressStore progress;
+    private final Set<String> bookIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private PersistentState state;
 
-    private final Map<String, BookContent> parsedBookCache = new LinkedHashMap<>(10, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, BookContent> eldest) {
-            return size() > 8;
+    private final WeightedCache<String, BookContent> parsedBookCache =
+            new WeightedCache<>(8, 64L * 1024 * 1024);
+
+    private void cacheBook(Book book, BookContent content) {
+        long bytes = content.getCoverImage() == null ? 0 : content.getCoverImage().length;
+        for (byte[] image : content.getEmbeddedImages().values()) bytes += image.length;
+        for (Chapter chapter : content.getChapters()) {
+            bytes += 128 + 2L * (chapter.getHtmlContent().length() + chapter.getPlainText().length()
+                    + chapter.getTitle().length());
         }
-    };
+        parsedBookCache.put(book.getId(), content, bytes);
+    }
 
     public LibraryStorageService() {
         this(Path.of(System.getProperty("user.home")));
@@ -93,6 +100,7 @@ public class LibraryStorageService {
         this.dataDir = home.resolve(".luminaread");
         this.booksDir = home.resolve("LuminaRead_Books");
         this.stateFile = dataDir.resolve("library_state.bin");
+        this.progress = new ProgressStore(dataDir.resolve("progress"));
         initDirectories();
         loadState();
     }
@@ -106,7 +114,7 @@ public class LibraryStorageService {
         }
     }
 
-    public synchronized void loadState() {
+    private void loadState() {
         if (Files.exists(stateFile)) {
             try (var input = new BufferedInputStream(Files.newInputStream(stateFile), 32768);
                  var ois = new ObjectInputStream(input)) {
@@ -124,6 +132,7 @@ public class LibraryStorageService {
                     if (!this.state.settingsEmbeddedAuthoritative && Files.exists(jsonSettingsFile)) {
                         loadLegacySettings(jsonSettingsFile);
                     }
+                    restoreProgress();
                     return;
                 }
                 throw new IOException("Неизвестный формат библиотеки");
@@ -132,6 +141,7 @@ public class LibraryStorageService {
                         + ". Файл сохранён без изменений.", ex);
             }
         }
+        bookIds.clear();
         this.state = new PersistentState();
         Path jsonSettingsFile = dataDir.resolve("settings.json");
         if (Files.exists(jsonSettingsFile)) {
@@ -146,6 +156,28 @@ public class LibraryStorageService {
         }
     }
 
+    private void restoreProgress() {
+        bookIds.clear();
+        for (Book book : state.books) {
+            bookIds.add(book.getId());
+            progress.restore(book);
+        }
+    }
+
+    public void saveProgress(Book book) {
+        synchronized (progress) {
+            if (bookIds.contains(book.getId())) progress.save(book);
+        }
+    }
+
+    public boolean hasProgressError() {
+        return progress.hasError();
+    }
+
+    public void flushProgress() throws InterruptedException {
+        progress.flush();
+    }
+
     public synchronized void saveState() {
         try {
             state.settingsEmbeddedAuthoritative = true;
@@ -154,11 +186,28 @@ public class LibraryStorageService {
                 oos.writeObject(state);
                 oos.flush();
             });
-            Path jsonSettingsFile = dataDir.resolve("settings.json");
-            settingsJsonRepository.save(this.state.settings.getDisplayConfig(),
-                    this.state.settings.getOpdsConfig(), jsonSettingsFile);
         } catch (IOException ex) {
             throw new UncheckedIOException("Не удалось сохранить библиотеку: " + stateFile, ex);
+        }
+        // The library is committed. The JSON copy serves export and legacy readers.
+        try {
+            settingsJsonRepository.save(state.settings.getDisplayConfig(), state.settings.getOpdsConfig(),
+                    dataDir.resolve("settings.json"));
+        } catch (UncheckedIOException | SecurityException ex) {
+            java.util.logging.Logger.getLogger(LibraryStorageService.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Библиотека сохранена; не удалось обновить копию настроек", ex);
+        }
+    }
+
+    private <T> void changeList(List<T> list, Runnable change) {
+        List<T> before = new ArrayList<>(list);
+        change.run();
+        try {
+            saveState();
+        } catch (UncheckedIOException | SecurityException ex) {
+            list.clear();
+            list.addAll(before);
+            throw ex;
         }
     }
 
@@ -264,13 +313,8 @@ public class LibraryStorageService {
             for (Book existing : state.books) {
                 if (existing.getFilePath().equals(absPath)) {
                     ensureNonEmptyChapters(existing, targetFile, parsed);
-                    existing.setFormat(format);
-                    existing.setTotalWords(parsed.getTotalWords());
-                    if (parsed.getCoverImage() != null) {
-                        existing.setCoverImage(parsed.getCoverImage());
-                    }
-                    parsedBookCache.put(existing.getId(), parsed);
-                    saveState();
+                    updateMetadata(existing, format, parsed, true);
+                    cacheBook(existing, parsed);
                     return existing;
                 }
             }
@@ -283,9 +327,9 @@ public class LibraryStorageService {
             book.setCoverImage(parsed.getCoverImage());
             book.setTotalWords(parsed.getTotalWords());
 
-            state.books.add(0, book);
-            parsedBookCache.put(book.getId(), parsed);
-            saveState();
+            changeList(state.books, () -> state.books.add(0, book));
+            bookIds.add(book.getId());
+            cacheBook(book, parsed);
             return book;
         }
     }
@@ -341,15 +385,31 @@ public class LibraryStorageService {
         ensureNonEmptyChapters(book, file, parsed);
 
         synchronized (this) {
-            book.setFormat(realFormat);
-            book.setTotalWords(parsed.getTotalWords());
-            if (book.getCoverImage() == null && parsed.getCoverImage() != null) {
-                book.setCoverImage(parsed.getCoverImage());
-            }
-            parsedBookCache.put(book.getId(), parsed);
-            saveState();
+            if (bookIds.contains(book.getId())) updateMetadata(book, realFormat, parsed, false);
+            cacheBook(book, parsed);
         }
         return parsed;
+    }
+
+    private void updateMetadata(Book book, String format, BookContent parsed, boolean replaceCover) {
+        String oldFormat = book.getFormat();
+        int oldWords = book.getTotalWords();
+        byte[] oldCover = book.getCoverImage();
+        byte[] cover = parsed.getCoverImage() != null && (replaceCover || oldCover == null)
+                ? parsed.getCoverImage() : oldCover;
+        int words = parsed.getTotalWords();
+        if (format.equals(oldFormat) && words == oldWords && java.util.Arrays.equals(cover, oldCover)) return;
+        book.setFormat(format);
+        book.setTotalWords(words);
+        book.setCoverImage(cover);
+        try {
+            saveState();
+        } catch (UncheckedIOException | SecurityException ex) {
+            book.setFormat(oldFormat);
+            book.setTotalWords(oldWords);
+            book.setCoverImage(oldCover);
+            throw ex;
+        }
     }
 
     private void ensureNonEmptyChapters(Book book, File file, BookContent parsed) {
@@ -373,12 +433,22 @@ public class LibraryStorageService {
         if (book == null) return;
         Book stored = state.books.stream().filter(b -> b.getId().equals(book.getId())).findFirst().orElse(null);
         if (stored == null) return;
-        state.books.removeIf(b -> b.getId().equals(book.getId()));
+        var bookmarks = new ArrayList<>(state.bookmarks);
+        var highlights = new ArrayList<>(state.highlights);
         state.bookmarks.removeIf(bm -> bm.getBookId().equals(book.getId()));
         state.highlights.removeIf(hl -> hl.getBookId().equals(book.getId()));
+        try {
+            changeList(state.books, () -> state.books.remove(stored));
+        } catch (UncheckedIOException | SecurityException ex) {
+            state.bookmarks = bookmarks;
+            state.highlights = highlights;
+            throw ex;
+        }
+        synchronized (progress) {
+            bookIds.remove(book.getId());
+            progress.remove(book.getId());
+        }
         parsedBookCache.remove(book.getId());
-        // Persist the library change before touching the user's original file.
-        saveState();
         if (deleteFileFromDisk) {
             try {
                 Files.deleteIfExists(Path.of(stored.getFilePath()));
@@ -390,14 +460,12 @@ public class LibraryStorageService {
 
     public synchronized void addBookmark(Bookmark bookmark) {
         if (bookmark != null) {
-            state.bookmarks.add(0, bookmark);
-            saveState();
+            changeList(state.bookmarks, () -> state.bookmarks.add(0, bookmark));
         }
     }
 
     public synchronized void removeBookmark(String bookmarkId) {
-        state.bookmarks.removeIf(b -> b.getId().equals(bookmarkId));
-        saveState();
+        changeList(state.bookmarks, () -> state.bookmarks.removeIf(b -> b.getId().equals(bookmarkId)));
     }
 
     public synchronized List<Bookmark> getBookmarks(String bookIdFilter) {
@@ -411,14 +479,12 @@ public class LibraryStorageService {
 
     public synchronized void addHighlight(Highlight highlight) {
         if (highlight != null) {
-            state.highlights.add(0, highlight);
-            saveState();
+            changeList(state.highlights, () -> state.highlights.add(0, highlight));
         }
     }
 
     public synchronized void removeHighlight(String highlightId) {
-        state.highlights.removeIf(h -> h.getId().equals(highlightId));
-        saveState();
+        changeList(state.highlights, () -> state.highlights.removeIf(h -> h.getId().equals(highlightId)));
     }
 
     public synchronized List<Highlight> getHighlights(String bookIdFilter) {

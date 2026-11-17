@@ -56,6 +56,42 @@ class BookIntegrityTest {
         }
     }
 
+    @Test void fb2TablesAndFootnoteLinksSurviveImportAndPagination() throws Exception {
+        Path file = dir.resolve("footnotes.fb2");
+        Files.writeString(file, "<FictionBook xmlns:l='http://www.w3.org/1999/xlink'><body><section>"
+                + "<p><emphasis>" + "Раздел ".repeat(160) + "</emphasis><a l:href='#note'>1</a></p>"
+                + "<table><tr><td>Ячейка</td></tr></table></section></body>"
+                + "<body name='notes'><section><p id='note'>Примечание.</p></section></body></FictionBook>");
+        var content = new Fb2Parser().parse(file.toFile());
+        var pages = PaginationEngine.paginateChapter(content.getChapters().get(0), 600, false);
+        assertTrue(pages.size() > 1);
+        String joined = String.join("", pages);
+        assertTrue(joined.contains("<a href='#note'>1</a>"));
+        assertTrue(joined.contains("<table><tr><td>Ячейка</td></tr></table>"));
+        assertTrue(content.getChapters().get(1).getHtmlContent().contains("id='note'"));
+    }
+
+    @Test void epubKeepsNestedTableAndInlineIllustrationInReadingOrder() throws Exception {
+        Path book = dir.resolve("layout.epub");
+        String chapter = "<html><body><div><p><strong>" + "Before ".repeat(110)
+                + "</strong><img src='image.png'/>After image.</p>"
+                + "<table><tr><td>Cell</td></tr></table></div></body></html>";
+        try (var zip = new ZipOutputStream(Files.newOutputStream(book))) {
+            zip.putNextEntry(new ZipEntry("chapter.xhtml"));
+            zip.write(chapter.getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("image.png"));
+            zip.write("fixture".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        var parsed = new EpubParser().parse(book.toFile());
+        var pages = PaginationEngine.paginateChapter(parsed.getChapters().get(0), 600, false);
+        String joined = String.join("", pages);
+        assertTrue(joined.contains("<strong>"));
+        assertTrue(joined.contains("<table><tr><td>Cell</td></tr></table>"));
+        assertTrue(joined.contains("<img src=") && joined.indexOf("<img src=") < joined.indexOf("After image."));
+    }
+
     @Test void detectedFormatTakesPriorityOverMisleadingExtension() throws Exception {
         var registry = new BookParserRegistry();
         assertInstanceOf(EpubParser.class, registry.findParser(dir.resolve("book.fb2").toFile(), "EPUB").orElseThrow());

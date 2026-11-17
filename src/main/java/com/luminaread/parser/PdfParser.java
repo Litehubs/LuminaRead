@@ -3,12 +3,11 @@ package com.luminaread.parser;
 import com.luminaread.model.BookContent;
 import com.luminaread.model.Chapter;
 import com.luminaread.util.HtmlSanitizer;
+import com.luminaread.util.Json;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,13 +16,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class PdfParser implements BookParser {
-    private static final Pattern PAGE_MARKER = Pattern.compile("===LUMINA_PAGE_(\\d+)===");
-
-    private static final int PAGES_PER_CHAPTER = 1;
     private static final long MAX_EXTRACTED_TEXT_BYTES = 128L * 1024 * 1024;
 
     @Override
@@ -106,7 +100,7 @@ public class PdfParser implements BookParser {
                             var data = $.NSData.dataWithData(img.TIFFRepresentation);
                             data.writeToFileAtomically(outDir + '/page_' + (i + 1) + '.tiff', true);
                         }
-                        var pageText = '===LUMINA_PAGE_' + (i + 1) + '===\\n' + txt + '\\n';
+                        var pageText = JSON.stringify([i + 1, txt]) + '\\n';
                         output.writeData($(pageText).dataUsingEncoding($.NSUTF8StringEncoding));
                     }
                     '';
@@ -142,13 +136,6 @@ public class PdfParser implements BookParser {
         } catch (Exception ex) {
             java.util.logging.Logger.getLogger(PdfParser.class.getName())
                     .log(java.util.logging.Level.FINE, "PDFKit недоступен; пробуем другой способ чтения", ex);
-            if (Boolean.getBoolean("luminaread.debugPdf")) {
-                ex.printStackTrace(System.err);
-                try { if (tempOutput != null) System.err.println("PDFKit output: " + Files.readString(tempOutput, StandardCharsets.UTF_8)); }
-                catch (Exception outputError) {
-                    logPdfFallback("Не удалось прочитать диагностический вывод PDFKit", outputError);
-                }
-            }
             return false;
         } finally {
             if (process != null && process.isAlive()) process.destroyForcibly();
@@ -178,44 +165,25 @@ public class PdfParser implements BookParser {
     }
 
     private void readPdfKitPages(Path textFile, Path cacheDir, BookContent content) throws Exception {
-        StringBuilder pageText = new StringBuilder();
-        StringBuilder chapterHtml = new StringBuilder();
-        StringBuilder chapterPlain = new StringBuilder();
-        int pageNumber = 0;
-        int chapterStartPage = 1;
-        int chapterIndex = 0;
-
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                Files.newInputStream(textFile), StandardCharsets.UTF_8), 64 * 1024)) {
+        List<Chapter> chapters = new ArrayList<>();
+        try (var reader = Files.newBufferedReader(textFile, StandardCharsets.UTF_8)) {
             String line;
             while ((line = reader.readLine()) != null) {
-                Matcher marker = PAGE_MARKER.matcher(line.trim());
-                if (marker.matches()) {
-                    if (pageNumber > 0) {
-                        appendPage(pageNumber, pageText.toString(), cacheDir, chapterHtml, chapterPlain);
-                        if (pageNumber % PAGES_PER_CHAPTER == 0) {
-                            chapterIndex = flushChapter(content, chapterIndex, chapterStartPage, pageNumber,
-                                    chapterHtml, chapterPlain);
-                            chapterStartPage = pageNumber + 1;
-                        }
-                    }
-                    pageNumber = Integer.parseInt(marker.group(1));
-                    pageText.setLength(0);
-                } else if (pageNumber > 0) {
-                    if (!pageText.isEmpty()) pageText.append('\n');
-                    pageText.append(line);
+                if (line.isBlank()) continue; // osascript may append an empty result line.
+                int page = chapters.size() + 1;
+                if (!(Json.parse(line) instanceof List<?> record) || record.size() != 2
+                        || !(record.get(0) instanceof Number number) || number.doubleValue() != page
+                        || !(record.get(1) instanceof String text)) {
+                    throw new java.io.IOException("PDFKit вернул повреждённую запись страницы");
                 }
+                var html = new StringBuilder();
+                var plain = new StringBuilder();
+                appendPage(page, text, cacheDir, html, plain);
+                chapters.add(new Chapter(page - 1, "Страница " + page, html.toString(), plain.toString()));
             }
         }
-
-        if (pageNumber > 0) {
-            appendPage(pageNumber, pageText.toString(), cacheDir, chapterHtml, chapterPlain);
-            chapterIndex = flushChapter(content, chapterIndex, chapterStartPage, pageNumber,
-                    chapterHtml, chapterPlain);
-        }
-        if (pageNumber == 0) {
-            throw new IllegalStateException("PDFKit не вернул текстовые страницы.");
-        }
+        if (chapters.isEmpty()) throw new java.io.IOException("PDFKit не вернул страницы");
+        chapters.forEach(content::addChapter);
     }
 
     private void appendPage(int pageNumber, String rawText, Path cacheDir,
@@ -234,6 +202,8 @@ public class PdfParser implements BookParser {
                 String normalized = normalizePdfParagraph(text);
                 if (!plain.isEmpty()) plain.append("\n\n");
                 plain.append(normalized);
+            } else {
+                plain.append("[Скан страницы ").append(pageNumber).append("]");
             }
         } else if (!text.isEmpty()) {
             String[] paragraphs = text.split("(?:\\R\\s*){2,}");
@@ -245,25 +215,10 @@ public class PdfParser implements BookParser {
                     plain.append(normalized);
                 }
             }
-        } else if (hasImage) {
-            if (!plain.isEmpty()) plain.append('\n');
-            plain.append("[Скан страницы ").append(pageNumber).append("]");
         } else {
             if (!plain.isEmpty()) plain.append('\n');
             plain.append("[На странице ").append(pageNumber).append(" нет текстового слоя]");
         }
-    }
-
-    private int flushChapter(BookContent content, int chapterIndex, int startPage, int endPage,
-                             StringBuilder html, StringBuilder plain) {
-        if (!plain.isEmpty()) {
-            String title = startPage == endPage ? "Страница " + startPage
-                    : "Страницы " + startPage + "–" + endPage;
-            content.addChapter(new Chapter(chapterIndex++, title, html.toString(), plain.toString().trim()));
-        }
-        html.setLength(0);
-        plain.setLength(0);
-        return chapterIndex;
     }
 
     private String extractWithPdfToText(File file) {

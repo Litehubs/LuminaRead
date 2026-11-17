@@ -171,16 +171,30 @@ public class MainWindow extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                try {
-                    storageService.saveState();
-                } catch (java.io.UncheckedIOException | SecurityException ex) {
-                    UiPersistenceErrors.show(MainWindow.this,
-                            "Не удалось сохранить библиотеку. Окно оставлено открытым. Проверьте доступ к файлам и повторите закрытие.",
-                            ex);
-                    return;
-                }
-                disposeReadingResources();
-                setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                if (!isEnabled() || libraryPanel.focusImport()) return;
+                workspace.cancelTransition();
+                readerPanel.pauseForClose();
+                setEnabled(false);
+                new javax.swing.SwingWorker<Void, Void>() {
+                    @Override protected Void doInBackground() throws InterruptedException {
+                        storageService.flushProgress();
+                        storageService.saveState();
+                        return null;
+                    }
+
+                    @Override protected void done() {
+                        try {
+                            get();
+                            disposeReadingResources();
+                            dispose();
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                            reopenAfterSaveError(ex);
+                        } catch (java.util.concurrent.ExecutionException ex) {
+                            reopenAfterSaveError(ex.getCause());
+                        }
+                    }
+                }.execute();
             }
             @Override
             public void windowClosed(WindowEvent e) {
@@ -190,6 +204,13 @@ public class MainWindow extends JFrame {
 
         applyGlobalTheme(currentTheme);
         updateAnimations();
+    }
+
+    private void reopenAfterSaveError(Throwable error) {
+        setEnabled(true);
+        readerPanel.resumeAfterCloseFailure();
+        UiPersistenceErrors.show(this,
+                "Не удалось сохранить библиотеку. Проверьте доступ к файлам и повторите закрытие.", error);
     }
 
     private void applyReaderPreferences() {

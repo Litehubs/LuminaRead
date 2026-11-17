@@ -1,5 +1,6 @@
 package com.luminaread;
 
+import com.luminaread.service.CacheCleanup;
 import com.luminaread.service.DictionaryService;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
@@ -42,6 +43,7 @@ public class LuminaReadApp {
             }
             return;
         }
+        CacheCleanup.prune(Path.of(System.getProperty("user.home"), ".luminaread", "cache"));
         ensureStarterBooksExist(storageService);
         if (java.awt.GraphicsEnvironment.isHeadless()) {
             return;
