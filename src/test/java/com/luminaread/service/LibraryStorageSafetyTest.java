@@ -28,6 +28,71 @@ class LibraryStorageSafetyTest {
         try (var files = Files.list(home)) { assertEquals(1, files.count()); }
     }
 
+    @Test void interruptedWriterDoesNotPublishAStagedFile() throws Exception {
+        Path library = Files.writeString(home.resolve("library.bin"), "previous");
+        try {
+            assertThrows(java.io.InterruptedIOException.class, () -> AtomicFile.write(library, output -> {
+                output.write("valid replacement".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Thread.currentThread().interrupt();
+            }));
+        } finally {
+            Thread.interrupted();
+        }
+        assertEquals("previous", Files.readString(library));
+    }
+
+    @Test void killedWriterLeavesThePreviousFileReadable() throws Exception {
+        Path library = Files.writeString(home.resolve("library.bin"), "previous");
+        Path staged = home.resolve("staged");
+        var process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                "-cp", System.getProperty("java.class.path"), StagingProbe.class.getName(),
+                library.toString(), staged.toString()).start();
+        try {
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (!Files.exists(staged) && process.isAlive() && System.nanoTime() < deadline) Thread.sleep(10);
+            assertTrue(Files.exists(staged), "The child must finish staging before it is killed");
+            process.destroyForcibly();
+            assertTrue(process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals("previous", Files.readString(library));
+        } finally {
+            process.destroyForcibly();
+        }
+    }
+
+    public static final class StagingProbe {
+        public static void main(String[] args) throws IOException {
+            AtomicFile.write(Path.of(args[0]), output -> {
+                output.write("complete next version".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                output.flush();
+                Files.createFile(Path.of(args[1]));
+                try {
+                    new java.util.concurrent.CountDownLatch(1).await();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new java.io.InterruptedIOException();
+                }
+            });
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledOnOs({org.junit.jupiter.api.condition.OS.MAC, org.junit.jupiter.api.condition.OS.LINUX})
+    void readOnlyProfileKeepsTheLastCommittedCatalog() throws Exception {
+        var storage = new LibraryStorageService(home);
+        var book = storage.importBookFile(Files.writeString(home.resolve("book.txt"), "Readable words.").toFile(), false);
+        Path directory = home.resolve(".luminaread");
+        var original = Files.getPosixFilePermissions(directory);
+        try {
+            Files.setPosixFilePermissions(directory, java.nio.file.attribute.PosixFilePermissions.fromString("r-x------"));
+            org.junit.jupiter.api.Assumptions.assumeFalse(Files.isWritable(directory));
+            assertThrows(UncheckedIOException.class, () -> storage.toggleFavorite(book.getId()));
+            assertFalse(book.isFavorite());
+            assertFalse(new LibraryStorageService(home).getAllBooks().get(0).isFavorite());
+        } finally {
+            Files.setPosixFilePermissions(directory, original);
+        }
+    }
+
     @Test void corruptLibraryIsNeverReplacedByEmptyState() throws Exception {
         Path dir = Files.createDirectories(home.resolve(".luminaread"));
         Path file = dir.resolve("library_state.bin");

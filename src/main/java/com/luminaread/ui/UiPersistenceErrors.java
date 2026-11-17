@@ -1,6 +1,9 @@
 package com.luminaread.ui;
 
+import com.luminaread.service.LibraryStorageService;
+
 import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
 import java.awt.Component;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -16,6 +19,17 @@ final class UiPersistenceErrors {
             show(owner, message, ex);
             return false;
         }
+    }
+
+    static void defer(Component owner, LibraryStorageService storage, String message, Runnable action) {
+        defer(owner, storage, message, action, () -> {});
+    }
+
+    static void defer(Component owner, LibraryStorageService storage, String message, Runnable action, Runnable done) {
+        storage.writeAsync(action).whenComplete((unused, error) -> SwingUtilities.invokeLater(() -> {
+            if (error == null) done.run();
+            else show(owner, message, error.getCause() == null ? error : error.getCause());
+        }));
     }
 
     static void show(Component owner, String message, Throwable error) {

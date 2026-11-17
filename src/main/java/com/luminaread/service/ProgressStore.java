@@ -21,8 +21,10 @@ import java.util.regex.Pattern;
 
 /** Saves small, immutable reading checkpoints independently of the library catalog. */
 final class ProgressStore {
-    private static final int VERSION = 0x4c525001;
-    private static final int FILE_SIZE = 41;
+    private static final int VERSION_1 = 0x4c525001;
+    private static final int VERSION = 0x4c525002;
+    private static final int FILE_SIZE_V1 = 41;
+    private static final int FILE_SIZE = FILE_SIZE_V1 + Integer.BYTES;
     private static final Pattern BOOK_ID = Pattern.compile("[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}");
     private static final Logger LOG = Logger.getLogger(ProgressStore.class.getName());
 
@@ -111,7 +113,8 @@ final class ProgressStore {
         Path file = dir.resolve(book.getId());
         if (!Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
         try {
-            if (Files.size(file) != FILE_SIZE) throw new IOException("Неизвестный формат");
+            long size = Files.size(file);
+            if (size != FILE_SIZE && size != FILE_SIZE_V1) throw new IOException("Неизвестный формат");
             read(book, file);
         } catch (IOException | SecurityException ex) {
             LOG.log(Level.WARNING, "Не удалось восстановить прогресс; используется состояние библиотеки", ex);
@@ -120,9 +123,10 @@ final class ProgressStore {
 
     private void read(Book book, Path file) throws IOException {
         try (var in = new DataInputStream(Files.newInputStream(file))) {
-            if (in.readInt() != VERSION) throw new IOException("Неизвестный формат");
+            int version = in.readInt();
+            if (version != VERSION && version != VERSION_1) throw new IOException("Неизвестный формат");
             var position = new Position(in.readInt(), in.readInt(), in.readInt(), in.readDouble(),
-                    in.readBoolean(), in.readLong(), in.readLong());
+                    in.readBoolean(), in.readLong(), in.readLong(), version == VERSION_1 ? -1 : in.readInt());
             if (!Double.isFinite(position.percent()) || position.seconds() < 0
                     || in.read() != -1) throw new IOException("Повреждённая запись прогресса");
             position.apply(book);
@@ -134,10 +138,11 @@ final class ProgressStore {
     }
 
     private record Position(int chapter, int page, int scroll, double percent,
-                            boolean finished, long opened, long seconds) {
+                            boolean finished, long opened, long seconds, int textOffset) {
         static Position from(Book book) {
             return new Position(book.getCurrentChapterIndex(), book.getCurrentPageInChapter(), book.getScrollOffset(),
-                    book.getProgressPercent(), book.isFinished(), book.getLastOpenedTimestamp(), book.getTotalReadingSeconds());
+                    book.getProgressPercent(), book.isFinished(), book.getLastOpenedTimestamp(), book.getTotalReadingSeconds(),
+                    book.getTextOffset());
         }
 
         void write(DataOutputStream out) throws IOException {
@@ -149,12 +154,14 @@ final class ProgressStore {
             out.writeBoolean(finished);
             out.writeLong(opened);
             out.writeLong(seconds);
+            out.writeInt(textOffset);
         }
 
         void apply(Book book) {
             book.setCurrentChapterIndex(chapter);
             book.setCurrentPageInChapter(page);
             book.setScrollOffset(scroll);
+            book.setTextOffset(textOffset);
             book.setProgressPercent(percent);
             book.setFinished(finished);
             book.setLastOpenedTimestamp(opened);

@@ -110,7 +110,7 @@ public class EpubParser implements BookParser {
             if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
                     || lower.endsWith(".gif") || lower.endsWith(".svg") || lower.endsWith(".webp")) {
                 if (!lower.endsWith(".svg")) {
-                    content.putEmbeddedImage(path, e.getValue());
+                    if (content.getCoverImage() == null) content.setCoverImage(e.getValue());
                     if (content.getCoverImage() == null && lower.contains("cover")) {
                         content.setCoverImage(e.getValue());
                     }
@@ -158,7 +158,9 @@ public class EpubParser implements BookParser {
         int chapterIndex = 0;
         // Different spelling/case can resolve to the same archive entry.
         java.util.Set<byte[]> processedEntries = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-        for (String chapterPath : spineFiles) {
+        var queuedPaths = new java.util.HashSet<>(spineFiles);
+        for (int next = 0; next < spineFiles.size(); next++) {
+            String chapterPath = spineFiles.get(next);
             byte[] chBytes = findEntryBytesFlexible(zipEntries, chapterPath);
             if (chBytes == null || !processedEntries.add(chBytes)) continue;
 
@@ -167,7 +169,11 @@ public class EpubParser implements BookParser {
 
             rawXhtml = convertSvgImagesToImgTags(rawXhtml);
             String bodyHtml = HtmlSanitizer.sanitizeBodyFragment(rawXhtml);
-            bodyHtml = rewriteImageSources(bodyHtml, chapterDir, imageUriByEntryPath);
+            HtmlPages.checkDepth(bodyHtml);
+            bodyHtml = rewriteBookLinks(rewriteImageSources(bodyHtml, chapterDir, imageUriByEntryPath),
+                    chapterDir, target -> {
+                        if (zipEntries.containsKey(target) && queuedPaths.add(target)) spineFiles.add(target);
+                    });
 
             String plainText = HtmlSanitizer.htmlToPlainText(bodyHtml);
             boolean hasImg = bodyHtml.toLowerCase(Locale.ROOT).contains("<img");
@@ -187,7 +193,7 @@ public class EpubParser implements BookParser {
                 plainText = "[" + chTitle + " — Иллюстрация]";
             }
 
-            content.addChapter(new Chapter(chapterIndex++, chTitle, bodyHtml, plainText));
+            content.addChapter(new Chapter(chapterIndex++, chTitle, bodyHtml, plainText, chapterPath));
         }
 
         if (content.getChapters().isEmpty()) {
@@ -197,10 +203,11 @@ public class EpubParser implements BookParser {
                     if (lower.endsWith("container.xml") || lower.endsWith(".opf") || lower.endsWith(".ncx")) continue;
                     String raw = convertSvgImagesToImgTags(CharsetDetector.decodeBytes(entry.getValue()));
                     String body = rewriteImageSources(HtmlSanitizer.sanitizeBodyFragment(raw), getParentDir(entry.getKey()), imageUriByEntryPath);
+                    HtmlPages.checkDepth(body);
                     String plain = HtmlSanitizer.htmlToPlainText(body);
                     if (!plain.isBlank() || body.toLowerCase(Locale.ROOT).contains("<img")) {
                         content.addChapter(new Chapter(chapterIndex++, "Раздел " + (chapterIndex), body,
-                                plain.isBlank() ? "Иллюстрация" : plain));
+                                plain.isBlank() ? "Иллюстрация" : plain, entry.getKey()));
                     }
                 }
             }
@@ -215,10 +222,6 @@ public class EpubParser implements BookParser {
                 String html = "<div style='text-align:center; margin:10px 0;'><img src='" + uri + "'/></div>";
                 content.addChapter(new Chapter(chapterIndex++, pageTitle, html, pageTitle));
             }
-        }
-
-        if (content.getCoverImage() == null && !content.getEmbeddedImages().isEmpty()) {
-            content.setCoverImage(content.getEmbeddedImages().values().iterator().next());
         }
 
         return content;
@@ -435,6 +438,32 @@ public class EpubParser implements BookParser {
             }
         }
         return "";
+    }
+
+    private static final Pattern BOOK_LINK = Pattern.compile(
+            "(?i)(<a\\b[^>]*?\\s+href\\s*=\\s*)(['\"])(.*?)\\2");
+
+    private String rewriteBookLinks(String html, String directory, java.util.function.Consumer<String> include) {
+        return BOOK_LINK.matcher(html).replaceAll(match -> {
+            String href = HtmlSanitizer.decodeBasicEntities(match.group(3));
+            int hash = href.indexOf('#');
+            if (hash <= 0 || hash == href.length() - 1) return Matcher.quoteReplacement(match.group());
+            String path = href.substring(0, hash);
+            if (path.contains(":") || path.startsWith("/") || path.contains("\\") || path.contains("?")) {
+                return Matcher.quoteReplacement(match.group());
+            }
+            String destination = resolveRelativePath(directory, decodeUrlPath(path));
+            String lower = destination.toLowerCase(Locale.ROOT);
+            if (!lower.endsWith(".xhtml") && !lower.endsWith(".html") && !lower.endsWith(".htm")) {
+                return Matcher.quoteReplacement(match.group());
+            }
+            include.accept(destination);
+            var encoder = java.util.Base64.getUrlEncoder().withoutPadding();
+            var utf8 = java.nio.charset.StandardCharsets.UTF_8;
+            String reference = encoder.encodeToString(destination.getBytes(utf8)) + "."
+                    + encoder.encodeToString(href.substring(hash + 1).getBytes(utf8));
+            return Matcher.quoteReplacement(match.group(1) + "'#epub:" + reference + "'");
+        });
     }
 
     private String rewriteImageSources(String html, String chapterDir, Map<String, String> imageUriByEntryPath) {

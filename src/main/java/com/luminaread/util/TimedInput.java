@@ -15,6 +15,10 @@ public final class TimedInput extends FilterInputStream {
     private volatile boolean timedOut;
 
     public TimedInput(InputStream input, Duration timeout) {
+        this(input, timeout, () -> {});
+    }
+
+    public TimedInput(InputStream input, Duration timeout, Runnable abort) {
         super(input);
         long millis = timeout.toMillis();
         if (millis <= 0) throw new IllegalArgumentException("Timeout must be positive");
@@ -22,6 +26,7 @@ public final class TimedInput extends FilterInputStream {
             try {
                 if (!finished.await(millis, TimeUnit.MILLISECONDS)) {
                     timedOut = true;
+                    abort.run();
                     in.close();
                 }
             } catch (InterruptedException ex) {

@@ -2,11 +2,13 @@ package com.luminaread.model;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class BookContent {
+    private static final long MAX_BYTES = 64L * 1024 * 1024;
+    private static final int MAX_CHAPTER_CHARS = 2_000_000;
+    private static final int MAX_CHAPTERS = 10_000;
+    private long chapterBytes;
     private String title;
     private String author;
     private String description;
@@ -14,7 +16,7 @@ public class BookContent {
     private String language;
     private byte[] coverImage;
     private final List<Chapter> chapters = new ArrayList<>();
-    private final Map<String, byte[]> embeddedImages = new HashMap<>();
+
 
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }
@@ -32,20 +34,28 @@ public class BookContent {
     public void setLanguage(String language) { this.language = language; }
 
     public byte[] getCoverImage() { return coverImage; }
-    public void setCoverImage(byte[] coverImage) { this.coverImage = coverImage; }
+    public void setCoverImage(byte[] coverImage) {
+        if (chapterBytes + size(coverImage) > MAX_BYTES) throw tooLarge();
+        this.coverImage = coverImage;
+    }
+
+    public long estimatedBytes() { return chapterBytes + size(coverImage); }
+
+    private static int size(byte[] bytes) { return bytes == null ? 0 : bytes.length; }
+
+    private static IllegalArgumentException tooLarge() {
+        return new IllegalArgumentException("Документ превышает допустимый объём текста и изображений");
+    }
 
     public List<Chapter> getChapters() { return Collections.unmodifiableList(chapters); }
     public void addChapter(Chapter chapter) {
-        if (chapter != null) {
-            chapters.add(chapter);
-        }
-    }
-
-    public Map<String, byte[]> getEmbeddedImages() { return embeddedImages; }
-    public void putEmbeddedImage(String key, byte[] bytes) {
-        if (key != null && bytes != null) {
-            embeddedImages.put(key, bytes);
-        }
+        if (chapter == null) return;
+        int htmlChars = chapter.getHtmlContent().length();
+        long added = 128 + 2L * (htmlChars + chapter.getPlainText().length() + chapter.getTitle().length());
+        if (htmlChars > MAX_CHAPTER_CHARS || chapters.size() >= MAX_CHAPTERS
+                || estimatedBytes() + added > MAX_BYTES) throw tooLarge();
+        chapters.add(chapter);
+        chapterBytes += added;
     }
 
     public int getTotalWords() {

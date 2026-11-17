@@ -69,6 +69,8 @@ public class MainWindow extends JFrame {
 
     private String currentView = VIEW_LIBRARY;
     private ThemePalette currentTheme;
+    private String lastOpenedBook;
+    private String pendingFocusView;
 
     public MainWindow(LibraryStorageService storageService,
                       OnlineCatalogService catalogService,
@@ -108,10 +110,7 @@ public class MainWindow extends JFrame {
                 storageService,
                 ttsService,
                 dictionaryService,
-                () -> {
-                    libraryPanel.refreshBooksGrid();
-                    switchView(VIEW_LIBRARY);
-                },
+                () -> switchView(VIEW_LIBRARY),
                 this::applyGlobalTheme
         );
 
@@ -176,7 +175,8 @@ public class MainWindow extends JFrame {
                 readerPanel.pauseForClose();
                 setEnabled(false);
                 new javax.swing.SwingWorker<Void, Void>() {
-                    @Override protected Void doInBackground() throws InterruptedException {
+                    @Override protected Void doInBackground() throws InterruptedException, java.util.concurrent.ExecutionException {
+                        storageService.awaitWrites();
                         storageService.flushProgress();
                         storageService.saveState();
                         return null;
@@ -202,6 +202,10 @@ public class MainWindow extends JFrame {
             }
         });
 
+        addWindowFocusListener(new WindowAdapter() {
+            @Override public void windowGainedFocus(WindowEvent event) { focusCurrentView(); }
+        });
+
         applyGlobalTheme(currentTheme);
         updateAnimations();
     }
@@ -223,6 +227,7 @@ public class MainWindow extends JFrame {
                 && !Boolean.getBoolean("luminaread.reduceMotion");
         workspace.setAnimationsEnabled(enabled);
         readerPanel.setAnimationsEnabled(enabled);
+        libraryPanel.setAnimationsEnabled(enabled);
         mangaPanel.setAnimationsEnabled(enabled);
         ranobePanel.setAnimationsEnabled(enabled);
     }
@@ -322,9 +327,20 @@ public class MainWindow extends JFrame {
         sidebarPanel.setVisible(!VIEW_READER.equals(viewKey));
         viewCards.show(contentCardsPanel, viewKey);
         rebuildSidebar();
+        pendingFocusView = viewKey;
+        javax.swing.SwingUtilities.invokeLater(this::focusCurrentView);
+    }
+
+    private void focusCurrentView() {
+        if (pendingFocusView == null || !isFocused() || !isEnabled()) return;
+        String view = pendingFocusView;
+        pendingFocusView = null;
+        if (VIEW_READER.equals(view)) readerPanel.focusText();
+        else if (VIEW_LIBRARY.equals(view)) libraryPanel.focusBook(lastOpenedBook);
     }
 
     public void openBookInReader(Book book) {
+        lastOpenedBook = book.getId();
         readerPanel.openBook(book);
         switchView(VIEW_READER);
     }
@@ -332,6 +348,7 @@ public class MainWindow extends JFrame {
     private void openSavedPosition(String bookId, ReadingPosition position) {
         for (Book book : storageService.getAllBooks()) {
             if (book.getId().equals(bookId)) {
+                lastOpenedBook = book.getId();
                 readerPanel.openBook(book, position);
                 switchView(VIEW_READER);
                 return;
@@ -385,7 +402,7 @@ public class MainWindow extends JFrame {
             JMenuItem themeItem = new JMenuItem("Тема: " + palette.getDisplayName());
             themeItem.addActionListener(e -> {
                 storageService.getSettings().setThemeId(palette.getId());
-                UiPersistenceErrors.save(this, "Не удалось сохранить выбранную тему.", storageService::saveState);
+                UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить выбранную тему.", storageService::saveState);
                 applyGlobalTheme(palette);
             });
             viewMenu.add(themeItem);

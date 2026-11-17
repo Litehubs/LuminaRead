@@ -4,6 +4,7 @@ import com.luminaread.service.CacheCleanup;
 import com.luminaread.service.DictionaryService;
 import com.luminaread.service.LibraryStorageService;
 import com.luminaread.service.OnlineCatalogService;
+import com.luminaread.service.ProfileLock;
 import com.luminaread.service.TtsService;
 import com.luminaread.ui.MainWindow;
 import com.luminaread.ui.ModernUiFactory;
@@ -33,21 +34,30 @@ public class LuminaReadApp {
         }
         ModernUiFactory.installGlobalUiFonts();
 
+        ProfileLock lock;
+        Path profile = Path.of(System.getProperty("user.home"), ".luminaread");
+        try {
+            lock = ProfileLock.acquire(profile);
+        } catch (java.io.IOException | SecurityException ex) {
+            showStartupError(ex);
+            return;
+        }
+
         LibraryStorageService storageService;
         try {
             storageService = new LibraryStorageService();
-        } catch (IllegalStateException | java.io.UncheckedIOException ex) {
-            ex.printStackTrace();
-            if (!java.awt.GraphicsEnvironment.isHeadless()) {
-                JOptionPane.showMessageDialog(null, ex.getMessage(), "Ошибка открытия библиотеки", JOptionPane.ERROR_MESSAGE);
-            }
+            CacheCleanup.prune(profile.resolve("cache"));
+            ensureStarterBooksExist(storageService);
+        } catch (IllegalStateException | java.io.UncheckedIOException | SecurityException ex) {
+            release(lock);
+            showStartupError(ex);
             return;
         }
-        CacheCleanup.prune(Path.of(System.getProperty("user.home"), ".luminaread", "cache"));
-        ensureStarterBooksExist(storageService);
         if (java.awt.GraphicsEnvironment.isHeadless()) {
+            release(lock);
             return;
         }
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> release(lock), "LuminaRead-Profile"));
 
         File startupFile = args != null && args.length > 0 ? new File(args[0]) : null;
 
@@ -61,10 +71,27 @@ public class LuminaReadApp {
                 window.setVisible(true);
                 if (startupFile != null && startupFile.isFile()) window.importBookFromSystem(startupFile);
             } catch (IllegalStateException | java.io.UncheckedIOException ex) {
-                ex.printStackTrace();
-                JOptionPane.showMessageDialog(null, ex.getMessage(), "Ошибка открытия приложения", JOptionPane.ERROR_MESSAGE);
+                release(lock);
+                showStartupError(ex);
             }
         });
+    }
+
+    private static void release(ProfileLock lock) {
+        try {
+            lock.close();
+        } catch (java.io.IOException ex) {
+            java.util.logging.Logger.getLogger(LuminaReadApp.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Не удалось закрыть профиль", ex);
+        }
+    }
+
+    private static void showStartupError(Exception error) {
+        java.util.logging.Logger.getLogger(LuminaReadApp.class.getName())
+                .log(java.util.logging.Level.WARNING, "Не удалось открыть библиотеку", error);
+        if (!java.awt.GraphicsEnvironment.isHeadless()) {
+            JOptionPane.showMessageDialog(null, error.getMessage(), "Ошибка открытия библиотеки", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private static void ensureStarterBooksExist(LibraryStorageService storageService) {

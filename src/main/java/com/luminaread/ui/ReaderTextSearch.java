@@ -80,13 +80,19 @@ final class ReaderTextSearch {
     }
 
     private static String renderedText(ReaderHtmlKit kit, String fragment) throws IOException, BadLocationException {
+        Document document = readPage(kit, fragment);
+        return document.getText(0, document.getLength());
+    }
+
+    static javax.swing.text.html.HTMLDocument readPage(ReaderHtmlKit kit, String fragment)
+            throws IOException, BadLocationException {
         checkCancelled();
-        Document document = kit.createDefaultDocument();
+        var document = (javax.swing.text.html.HTMLDocument) kit.createDefaultDocument();
         try (StringReader input = new StringReader(ReaderHtmlKit.pageHtml(ReaderHtmlKit.preparePage(fragment)))) {
             kit.read(input, document, 0);
         }
         checkCancelled();
-        return document.getText(0, document.getLength());
+        return document;
     }
 
     private static int findOccurrence(Pattern query, String text, int previous, Direction direction) {

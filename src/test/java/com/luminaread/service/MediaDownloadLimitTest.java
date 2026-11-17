@@ -10,6 +10,49 @@ import java.util.Arrays;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MediaDownloadLimitTest {
+    @Test void connectsToTheValidatedAddressAndBlocksRedirectToPrivateNetwork() throws Exception {
+        var loopback = InetAddress.getByName("127.0.0.1");
+        HttpServer server = HttpServer.create(new InetSocketAddress(loopback, 0), 0);
+        var blocked = new java.util.concurrent.atomic.AtomicInteger();
+        var lookups = new java.util.concurrent.atomic.AtomicInteger();
+        server.createContext("/redirect", exchange -> {
+            String location = "http://private.fixture.invalid:" + server.getAddress().getPort() + "/blocked";
+            exchange.getResponseHeaders().set("Location", location);
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        });
+        server.createContext("/valid", exchange -> {
+            assertTrue(exchange.getRequestHeaders().getFirst("Host").startsWith("images.fixture.invalid:"));
+            exchange.sendResponseHeaders(200, 1);
+            try (var out = exchange.getResponseBody()) { out.write(9); }
+        });
+        server.createContext("/blocked", exchange -> {
+            blocked.incrementAndGet();
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var policy = new ImageUrlPolicy(host -> {
+                lookups.incrementAndGet();
+                return switch (host) {
+                    case "images.fixture.invalid" -> new InetAddress[]{loopback};
+                    case "private.fixture.invalid" -> new InetAddress[]{InetAddress.getByName("192.168.0.1")};
+                    default -> throw new java.net.UnknownHostException(host);
+                };
+            }, true);
+            var media = new MediaCacheService(100, policy);
+            String base = "http://images.fixture.invalid:" + server.getAddress().getPort();
+            assertArrayEquals(new byte[]{9}, media.downloadImageBytes(base + "/valid", null));
+            assertEquals(1, lookups.get(), "The connection must use the result of validation");
+            assertNull(media.downloadImageBytes(base + "/redirect", null));
+            assertEquals(3, lookups.get());
+            assertEquals(0, blocked.get());
+        } finally {
+            server.stop(0);
+        }
+    }
+
     @Test void acceptsLimitAndRejectsDeclaredAndChunkedOversize(@TempDir Path home) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/exact", exchange -> {
@@ -32,7 +75,7 @@ class MediaDownloadLimitTest {
         try {
             System.setProperty("user.home", home.toString());
             String base = "http://localhost:" + server.getAddress().getPort();
-            MediaCacheService media = new MediaCacheService(100);
+            MediaCacheService media = new MediaCacheService(100, new ImageUrlPolicy(InetAddress::getAllByName, true));
             byte[] exact = media.downloadImageBytes(base + "/exact", null);
             assertNotNull(exact);
             assertEquals(100, exact.length);

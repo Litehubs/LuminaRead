@@ -21,6 +21,7 @@ public class Book implements Serializable {
     private int currentChapterIndex;
     private int currentPageInChapter;
     private int scrollOffset;
+    private int textAnchor; // Offset plus one. Zero denotes a position saved by an older version.
     private double progressPercent;
 
     private boolean favorite;
@@ -93,6 +94,9 @@ public class Book implements Serializable {
     public void setScrollOffset(int scrollOffset) {
         this.scrollOffset = Math.max(0, scrollOffset);
     }
+
+    public int getTextOffset() { return textAnchor - 1; }
+    public void setTextOffset(int offset) { textAnchor = Math.max(0, offset + 1); }
 
     public double getProgressPercent() { return progressPercent; }
     public void setProgressPercent(double progressPercent) {

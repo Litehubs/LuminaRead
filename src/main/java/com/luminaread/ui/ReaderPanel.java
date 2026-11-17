@@ -82,6 +82,11 @@ public class ReaderPanel extends JPanel {
     private Integer pendingScrollOffset;
     private boolean disposed;
     private final Timer restoreScrollTimer;
+    private ReaderAnchors anchors;
+    private int pendingTextOffset = -1;
+    private String pendingLink;
+    private String legacyBookmark;
+    private final LatestSwingRequest<ReaderLinks.Target> links = new LatestSwingRequest<>();
     private final Timer saveScrollTimer;
     private boolean closing;
     private int currentChapterIndex = 0;
@@ -233,7 +238,7 @@ public class ReaderPanel extends JPanel {
         eyeCareCheckbox.setOpaque(false);
         eyeCareCheckbox.addActionListener(e -> {
             storageService.getSettings().setWarmEyeCareFilter(eyeCareCheckbox.isSelected());
-            UiPersistenceErrors.save(this, "Не удалось сохранить настройку чтения.", storageService::saveState);
+            UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить настройку чтения.", storageService::saveState);
             if (readerCanvasWrapper != null) {
                 readerCanvasWrapper.repaint();
             }
@@ -277,6 +282,7 @@ public class ReaderPanel extends JPanel {
             }
         };
         bookEditorPane.setEditable(false);
+        bookEditorPane.setFocusable(true);
         bookEditorPane.setEditorKit(new ReaderHtmlKit());
         bookEditorPane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
         if (bookEditorPane.getCaret() instanceof DefaultCaret) {
@@ -284,6 +290,11 @@ public class ReaderPanel extends JPanel {
         }
 
         setupReaderMouseZonesAndGestures();
+        bookEditorPane.addHyperlinkListener(event -> {
+            if (event.getEventType() == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED) {
+                followLink(event.getDescription());
+            }
+        });
 
         editorScrollPane = SmoothScrollUtil.enhanceAndReturn(new JScrollPane(bookEditorPane));
         editorScrollPane.setBorder(BorderFactory.createEmptyBorder());
@@ -304,6 +315,22 @@ public class ReaderPanel extends JPanel {
                 recordScrollPosition();
             }
             updateStatusBar();
+        });
+
+        editorScrollPane.getViewport().addComponentListener(new java.awt.event.ComponentAdapter() {
+            private int width;
+
+            @Override public void componentResized(java.awt.event.ComponentEvent event) {
+                int previous = width;
+                width = editorScrollPane.getViewport().getWidth();
+                if (previous == 0 || previous == width || currentBook == null || anchors == null
+                        || pendingScrollOffset != null || !isShowing() || closing) return;
+                var target = anchors.locate(currentBook.getTextOffset());
+                if (target == null || target.page() != currentPageIndex) return;
+                pendingTextOffset = target.offset();
+                pendingScrollOffset = currentBook.getScrollOffset();
+                restoreScrollTimer.restart();
+            }
         });
 
         readerCanvasWrapper = new JPanel(new BorderLayout()) {
@@ -376,7 +403,7 @@ public class ReaderPanel extends JPanel {
 
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (!SwingUtilities.isLeftMouseButton(e)) return;
+                if (!SwingUtilities.isLeftMouseButton(e) || bookEditorPane.getCursor().getType() == java.awt.Cursor.HAND_CURSOR) return;
                 String sel = bookEditorPane.getSelectedText();
                 if (sel != null && !sel.isBlank()) return;
                 if (!storageService.getSettings().isTapZonesEnabled()) return;
@@ -442,6 +469,14 @@ public class ReaderPanel extends JPanel {
             }
         });
 
+        for (int keyCode : new int[]{KeyEvent.VK_RIGHT, KeyEvent.VK_SPACE, KeyEvent.VK_PAGE_DOWN,
+                KeyEvent.VK_LEFT, KeyEvent.VK_PAGE_UP}) {
+            KeyStroke stroke = KeyStroke.getKeyStroke(keyCode, 0);
+            Object action = im.get(stroke);
+            bookEditorPane.getInputMap().put(stroke, action);
+            bookEditorPane.getActionMap().put(action, am.get(action));
+        }
+
         im.put(KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.META_DOWN_MASK), "findInBook");
         im.put(KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), "findInBook");
         am.put("findInBook", new AbstractAction() {
@@ -476,6 +511,10 @@ public class ReaderPanel extends JPanel {
         stopActiveFeatures();
         restoreScrollTimer.stop();
         pendingScrollOffset = null;
+        pendingTextOffset = -1;
+        pendingLink = null;
+        legacyBookmark = null;
+        anchors = null;
         currentBook = book;
         lastWheelChapterDirection = 0;
         currentContent = null;
@@ -491,8 +530,10 @@ public class ReaderPanel extends JPanel {
             book.setLastOpenedTimestamp(System.currentTimeMillis());
             for (Chapter chapter : currentContent.getChapters()) tocListModel.addElement(chapter);
             ReadingPosition position = requestedPosition != null ? requestedPosition
-                    : new ReadingPosition(book.getCurrentChapterIndex(), book.getCurrentPageInChapter(), book.getScrollOffset());
-            goToChapterAndPage(position.chapterIndex(), position.pageIndex(), Math.max(0, position.scrollOffset()));
+                    : new ReadingPosition(book.getCurrentChapterIndex(), book.getCurrentPageInChapter(), book.getScrollOffset(),
+                            book.getTextOffset(), null);
+            legacyBookmark = position.textOffset() < 0 ? position.bookmarkId() : null;
+            goToPosition(position, null);
         }, ex -> {
             currentContent = null;
             statusLeftLabel.setText("Не удалось открыть книгу");
@@ -508,20 +549,42 @@ public class ReaderPanel extends JPanel {
     }
 
     private void goToChapterAndPage(int chapterIdx, int pageIdx, int scrollOffset) {
+        legacyBookmark = null;
+        goToPosition(new ReadingPosition(chapterIdx, pageIdx, scrollOffset), null);
+    }
+
+    private void goToPosition(ReadingPosition position, String link) {
         if (currentContent == null || currentContent.getChapters().isEmpty()) return;
         int totalChapters = currentContent.getChapters().size();
-        this.currentChapterIndex = Math.max(0, Math.min(totalChapters - 1, chapterIdx));
+        this.currentChapterIndex = Math.max(0, Math.min(totalChapters - 1, position.chapterIndex()));
 
         Chapter chapter = currentContent.getChapters().get(currentChapterIndex);
         chapterLayout = ReaderTextSearch.Layout.from(storageService.getSettings());
-        currentChapterPages = chapterLayout.pages(chapter);
-        currentPageIndex = Math.max(0, Math.min(currentChapterPages.size() - 1, pageIdx));
+        List<String> pages = chapterLayout.pages(chapter);
+        if (anchors == null || pages != currentChapterPages) anchors = new ReaderAnchors(pages);
+        currentChapterPages = pages;
+        ReaderAnchors.Target target = anchors.locate(position.textOffset());
+        currentPageIndex = target == null ? Math.max(0, Math.min(pages.size() - 1, position.pageIndex())) : target.page();
 
         if (tocList.getSelectedIndex() != currentChapterIndex) {
             tocList.setSelectedIndex(currentChapterIndex);
         }
 
-        showPageAt(scrollOffset);
+        showPageAt(position.scrollOffset(), target == null ? -1 : target.offset(), link, position.textOffset());
+    }
+
+    private void followLink(String href) {
+        if (currentContent == null || href == null || !href.startsWith("#")) return;
+        var content = currentContent;
+        var layout = chapterLayout;
+        int chapter = currentChapterIndex;
+        int page = currentPageIndex;
+        links.start(() -> ReaderLinks.find(content.getChapters(), chapter, layout, href), target -> {
+            if (target == null || currentContent != content || chapterLayout != layout
+                    || currentChapterIndex != chapter || currentPageIndex != page) return;
+            legacyBookmark = null;
+            goToPosition(new ReadingPosition(target.chapter(), target.page(), 0), target.id());
+        }, error -> java.util.logging.Logger.getLogger(ReaderPanel.class.getName()).log(java.util.logging.Level.FINE, "Не удалось открыть ссылку в книге", error));
     }
 
     private boolean scrollToAdjacentChapter(int direction) {
@@ -545,15 +608,23 @@ public class ReaderPanel extends JPanel {
     }
 
     private void showPageAt(int scrollOffset) {
+        legacyBookmark = null;
+        showPageAt(scrollOffset, -1, null, -1);
+    }
+
+    private void showPageAt(int scrollOffset, int textOffsetOnPage, String link, int chapterOffset) {
         pageSurface.cancelTransition();
         clearSearch();
         currentBook.setScrollOffset(Math.max(0, scrollOffset));
+        currentBook.setTextOffset(chapterOffset);
+        pendingTextOffset = textOffsetOnPage;
+        pendingLink = link;
         renderCurrentViewport(scrollOffset);
         saveReadingProgress();
     }
 
     private void renderCurrentViewport() {
-        if (currentBook != null) renderCurrentViewport(currentBook.getScrollOffset());
+        if (currentBook != null) restoreVisiblePosition();
     }
 
     private void renderCurrentViewport(int scrollOffset) {
@@ -621,6 +692,19 @@ public class ReaderPanel extends JPanel {
 
         int bottom = Math.max(0, bar.getMaximum() - bar.getVisibleAmount());
         int requested = pendingScrollOffset;
+        var destination = targetBounds();
+        if (destination != null && (!layoutSettled && destination.getY() > bar.getMaximum())) {
+            if (!restoreScrollTimer.isRunning()) restoreScrollTimer.start();
+            return;
+        }
+        if (destination != null) {
+            // The saved viewport may start in the whitespace just before the anchored line.
+            int gap = pendingLink == null ? storageService.getSettings().getParagraphSpacingPx() : 0;
+            double slack = gap + (pendingLink == null ? destination.getHeight() : 0);
+            if (requested < destination.getY() - slack || requested >= destination.getMaxY() + slack) {
+                requested = (int) Math.floor(destination.getY());
+            }
+        }
         boolean waitForLayout = requested == SCROLL_TO_END ? bottom == 0 : requested > bottom;
         if (!layoutSettled && waitForLayout) {
             if (!restoreScrollTimer.isRunning()) restoreScrollTimer.start();
@@ -630,9 +714,43 @@ public class ReaderPanel extends JPanel {
         restoreScrollTimer.stop();
         SmoothScrollUtil.resetScroll(editorScrollPane, requested == SCROLL_TO_END ? bottom : Math.min(bottom, requested));
         pendingScrollOffset = null;
+        pendingTextOffset = -1;
+        pendingLink = null;
         recordScrollPosition();
+        int anchor = captureTextOffset();
+        if (anchor >= 0 && legacyBookmark != null) {
+            String id = legacyBookmark;
+            legacyBookmark = null;
+            UiPersistenceErrors.defer(this, storageService, "Не удалось обновить позицию закладки.",
+                    () -> storageService.migrateBookmark(id, anchor));
+        }
         // The scroll range is now known, even when restoring offset zero did not move the bar.
         saveScrollTimer.restart();
+    }
+
+    private java.awt.geom.Rectangle2D targetBounds() {
+        try {
+            var doc = (javax.swing.text.html.HTMLDocument) bookEditorPane.getDocument();
+            int offset = -1;
+            if (pendingLink != null) {
+                var element = doc.getElement(pendingLink);
+                if (element != null) offset = element.getStartOffset();
+            } else if (pendingTextOffset >= 0) {
+                offset = ReaderAnchors.modelOffset(doc, pendingTextOffset);
+            }
+            return offset >= 0 ? bookEditorPane.modelToView2D(offset) : null;
+        } catch (javax.swing.text.BadLocationException ex) {
+            return null;
+        }
+    }
+
+    private int captureTextOffset() {
+        if (anchors == null) return -1;
+        var viewport = editorScrollPane.getViewport();
+        int offset = bookEditorPane.viewToModel2D(new java.awt.Point(
+                viewport.getViewPosition().x + bookEditorPane.getInsets().left,
+                viewport.getViewPosition().y + 1));
+        return anchors.capture(currentPageIndex, bookEditorPane.getDocument(), offset);
     }
 
     private void recordScrollPosition() {
@@ -705,6 +823,10 @@ public class ReaderPanel extends JPanel {
         pageSurface.change(MotionSurface.Effect.PAGE, direction, () -> goToChapterAndPage(targetChapter, entryPage));
     }
 
+    void focusText() {
+        bookEditorPane.requestFocusInWindow();
+    }
+
     void setAnimationsEnabled(boolean enabled) {
         pageSurface.setAnimationsEnabled(enabled);
     }
@@ -717,6 +839,7 @@ public class ReaderPanel extends JPanel {
         int range = bar.getMaximum() - bar.getMinimum() - bar.getVisibleAmount();
         ReaderProgress.update(currentBook, currentChapterIndex, currentContent.getChapters().size(), currentPageIndex,
                 currentChapterPages.size(), scrolling, pendingScrollOffset == null, bar.getValue() - bar.getMinimum(), range);
+        if (pendingScrollOffset == null) currentBook.setTextOffset(captureTextOffset());
         storageService.saveProgress(currentBook);
         updateStatusBar();
     }
@@ -778,7 +901,7 @@ public class ReaderPanel extends JPanel {
         s.setFontSize(s.getFontSize() + delta);
         int scaledChars = Math.max(900, Math.min(4500, (int) (2400.0 * 19.0 / s.getFontSize())));
         s.setCharsPerPage(scaledChars);
-        UiPersistenceErrors.save(this, "Не удалось сохранить размер шрифта.", storageService::saveState);
+        UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить размер шрифта.", storageService::saveState);
         refreshReadingLayout();
     }
 
@@ -885,9 +1008,14 @@ public class ReaderPanel extends JPanel {
                 userLabel,
                 snippet
         );
-        if (UiPersistenceErrors.save(this, "Не удалось сохранить закладку.", () -> storageService.addBookmark(bm))) {
-            JOptionPane.showMessageDialog(this, "Закладка сохранена!", "Закладка", JOptionPane.INFORMATION_MESSAGE);
-        }
+        int bookmarkOffset = bookEditorPane.getSelectedText() == null ? captureTextOffset()
+                : anchors.capture(currentPageIndex, bookEditorPane.getDocument(), bookEditorPane.getSelectionStart());
+        bm.setTextOffset(bookmarkOffset);
+        UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить закладку.",
+                () -> storageService.addBookmark(bm), () -> {
+                    if (isShowing()) JOptionPane.showMessageDialog(this, "Закладка сохранена.",
+                            "Закладка", JOptionPane.INFORMATION_MESSAGE);
+                });
     }
 
     private void createHighlightFromSelection() {
@@ -931,7 +1059,7 @@ public class ReaderPanel extends JPanel {
                     noteField.getText(),
                     hex
             );
-            UiPersistenceErrors.save(this, "Не удалось сохранить цитату.", () -> storageService.addHighlight(hl));
+            UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить цитату.", () -> storageService.addHighlight(hl));
             renderCurrentViewport();
         }
     }
@@ -1035,13 +1163,20 @@ public class ReaderPanel extends JPanel {
         ReaderTypographyDialog.show(this, storageService.getSettings(), currentTheme, theme -> {
             currentTheme = theme;
             onThemeChangedGlobal.onThemeChanged(theme);
-        }, storageService::saveState, this::refreshReadingLayout);
+        }, () -> UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить оформление.",
+                storageService::saveState), this::refreshReadingLayout);
     }
 
     private void refreshReadingLayout() {
-        if (currentBook == null || chapterLayout == null) return;
+        restoreVisiblePosition();
+    }
+
+    private void restoreVisiblePosition() {
+        if (currentBook == null || chapterLayout == null || currentContent == null) return;
         boolean sameMode = chapterLayout.mode() == storageService.getSettings().getReadingMode();
-        goToChapterAndPage(currentChapterIndex, currentPageIndex, sameMode ? currentBook.getScrollOffset() : 0);
+        int offset = pendingScrollOffset == null ? captureTextOffset() : currentBook.getTextOffset();
+        goToPosition(new ReadingPosition(currentChapterIndex, currentPageIndex, sameMode ? currentBook.getScrollOffset() : 0,
+                offset, null), null);
     }
 
     public void stopActiveFeatures() {
@@ -1049,6 +1184,7 @@ public class ReaderPanel extends JPanel {
         saveReadingProgress();
         bookLoader.cancel();
         dictionaryLookup.cancel();
+        links.cancel();
         clearSearch();
         if (autoScrollActive) {
             toggleAutoScroll();
@@ -1094,10 +1230,6 @@ public class ReaderPanel extends JPanel {
         statusLeftLabel.setForeground(theme.getTextSecondary());
         statusRightLabel.setForeground(theme.getTextPrimary());
         searchBar.applyTheme(theme);
-        if (currentContent != null && chapterLayout != null && !chapterLayout.equals(ReaderTextSearch.Layout.from(storageService.getSettings()))) {
-            goToChapterAndPage(currentChapterIndex, currentPageIndex);
-        } else {
-            renderCurrentViewport();
-        }
+        renderCurrentViewport();
     }
 }

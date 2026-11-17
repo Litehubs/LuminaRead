@@ -6,7 +6,6 @@ import org.junit.jupiter.api.io.TempDir;
 import javax.swing.*;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
-import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -15,10 +14,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class MangaPageRetryTest {
     @Test void retryUpdatesOnlyTheFailedPage(@TempDir Path home) throws Exception {
-        String main = Path.of(MangaPanel.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        String tests = Path.of(getClass().getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                "-Djava.awt.headless=true", "-Duser.home=" + home, "-cp", main + File.pathSeparator + tests,
+                "-Djava.awt.headless=true", "-Duser.home=" + home, "-cp", System.getProperty("java.class.path"),
                 Probe.class.getName()).redirectErrorStream(true).start();
         try { assertTrue(process.waitFor(20, TimeUnit.SECONDS)); assertEquals(0, process.exitValue(), new String(process.getInputStream().readAllBytes())); }
         finally { process.destroyForcibly(); }

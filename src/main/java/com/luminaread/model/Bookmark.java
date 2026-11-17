@@ -18,6 +18,7 @@ public class Bookmark implements Serializable {
     private final String chapterTitle;
     private final int pageIndex;
     private final int scrollOffset;
+    private int textAnchor;
     private String label;
     private final String snippet;
     private final long createdAt;
@@ -43,6 +44,8 @@ public class Bookmark implements Serializable {
     public String getChapterTitle() { return chapterTitle; }
     public int getPageIndex() { return pageIndex; }
     public int getScrollOffset() { return scrollOffset; }
+    public int getTextOffset() { return textAnchor - 1; }
+    public void setTextOffset(int offset) { textAnchor = Math.max(0, offset + 1); }
     public String getLabel() { return label; }
     public void setLabel(String label) { this.label = label; }
     public String getSnippet() { return snippet; }

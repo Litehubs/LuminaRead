@@ -1,6 +1,6 @@
 package com.luminaread.parser;
 
-import com.luminaread.util.AtomicFile;
+import com.luminaread.util.GeneratedCache;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,7 +26,7 @@ final class BookImages {
         }
         Path path = Path.of(System.getProperty("user.home"), ".luminaread", "cache", "books", hash + extension);
         if (!Files.isRegularFile(path) || Files.size(path) != bytes.length) {
-            AtomicFile.write(path, output -> output.write(bytes));
+            GeneratedCache.write(path, output -> output.write(bytes));
         }
         return path;
     }

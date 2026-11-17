@@ -13,7 +13,6 @@ import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
 import java.awt.Component;
 import java.awt.Container;
-import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,12 +24,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ReaderPositionTest {
     @Test
     void restoresSavedScrollAndUsesTheBookmarksOwnPosition(@TempDir Path home) throws Exception {
-        String main = Path.of(ReaderPanel.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        String tests = Path.of(getClass().getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
         Path log = home.resolve("reading-position.log");
         Process child = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-Duser.home=" + home,
-                "-cp", main + File.pathSeparator + tests, Probe.class.getName())
+                "-cp", System.getProperty("java.class.path"), Probe.class.getName())
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
         try {
             assertTrue(child.waitFor(25, TimeUnit.SECONDS), "Reader position probe did not finish");
@@ -88,6 +85,7 @@ class ReaderPositionTest {
                 var reopenedStorage = new LibraryStorageService();
                 Book reopened = reopenedStorage.getAllBooks().get(0);
                 require(reopened.getScrollOffset() == 420, "Closing lost the offset on disk");
+                require(reopened.getTextOffset() > 0, "Closing lost the text anchor");
                 SwingUtilities.invokeAndWait(() -> {
                     readers[1] = createReader(reopenedStorage);
                     readers[1].openBook(reopened);
@@ -104,6 +102,9 @@ class ReaderPositionTest {
                     jump.doClick();
                 });
                 awaitLayout(readers[1], contentField, scrollField, 140);
+                reopenedStorage.awaitWrites();
+                require(new LibraryStorageService().getBookmarks(reopened.getId()).get(0).getTextOffset() > 0,
+                        "Opening a legacy bookmark must save its text anchor");
             } finally {
                 SwingUtilities.invokeAndWait(() -> {
                     for (ReaderPanel reader : readers) if (reader != null) reader.disposeResources();
@@ -120,11 +121,13 @@ class ReaderPositionTest {
 
         private static void awaitLayout(ReaderPanel reader, Field content, Field viewport, int expected) throws Exception {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            int[] observedOffset = {-1};
             while (System.nanoTime() < deadline) {
                 boolean[] ready = new boolean[1];
                 SwingUtilities.invokeAndWait(() -> {
                     layout(reader);
                     var bar = scroll(reader, viewport).getVerticalScrollBar();
+                    observedOffset[0] = bar.getValue();
                     ready[0] = read(content, reader) != null
                             && bar.getMaximum() - bar.getVisibleAmount() >= 420
                             && bar.getValue() == expected;
@@ -132,7 +135,7 @@ class ReaderPositionTest {
                 if (ready[0]) return;
                 Thread.sleep(20);
             }
-            throw new AssertionError("Reader did not reach scroll offset " + expected);
+            throw new AssertionError("Reader did not reach scroll offset " + expected + ", observed " + observedOffset[0]);
         }
 
         private static JButton findJump(Container parent) {

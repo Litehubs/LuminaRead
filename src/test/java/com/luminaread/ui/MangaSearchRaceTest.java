@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import javax.swing.*;
 import java.awt.*;
-import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -18,10 +17,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class MangaSearchRaceTest {
     @Test void oldResultsCannotReplaceNewSearchOrAnotherSection(@TempDir Path home) throws Exception {
-        String main = Path.of(MangaPanel.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        String tests = Path.of(getClass().getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                "-Djava.awt.headless=true", "-Duser.home=" + home, "-cp", main + File.pathSeparator + tests,
+                "-Djava.awt.headless=true", "-Duser.home=" + home, "-cp", System.getProperty("java.class.path"),
                 Probe.class.getName()).redirectErrorStream(true).start();
         try {
             assertTrue(process.waitFor(20, TimeUnit.SECONDS));
@@ -29,10 +26,8 @@ final class MangaSearchRaceTest {
         } finally { process.destroyForcibly(); }
     }
     @Test void closingPanelCancelsRunningSearch(@TempDir Path home) throws Exception {
-        String main = Path.of(MangaPanel.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        String tests = Path.of(getClass().getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                "-Djava.awt.headless=true", "-Duser.home=" + home, "-cp", main + File.pathSeparator + tests,
+                "-Djava.awt.headless=true", "-Duser.home=" + home, "-cp", System.getProperty("java.class.path"),
                 CloseProbe.class.getName()).redirectErrorStream(true).start();
         try { assertTrue(process.waitFor(20, TimeUnit.SECONDS)); assertEquals(0, process.exitValue(), new String(process.getInputStream().readAllBytes())); }
         finally { process.destroyForcibly(); }

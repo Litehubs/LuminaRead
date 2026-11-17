@@ -96,9 +96,9 @@ public class LibraryPanel extends JPanel {
         searchField.setToolTipText("Поиск по названию, автору, серии или формату...");
         ModernUiFactory.styleTextField(searchField, currentTheme);
         searchField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { refreshBooksGrid(); }
-            @Override public void removeUpdate(DocumentEvent e) { refreshBooksGrid(); }
-            @Override public void changedUpdate(DocumentEvent e) { refreshBooksGrid(); }
+            @Override public void insertUpdate(DocumentEvent e) { refreshResults(); }
+            @Override public void removeUpdate(DocumentEvent e) { refreshResults(); }
+            @Override public void changedUpdate(DocumentEvent e) { refreshResults(); }
         });
 
         sortCombo = new JComboBox<>(new String[]{
@@ -113,7 +113,7 @@ public class LibraryPanel extends JPanel {
                 case 3 -> "PROGRESS";
                 default -> "RECENT";
             };
-            refreshBooksGrid();
+            refreshResults();
         });
 
         JLabel searchLbl = new JLabel("Поиск:");
@@ -151,6 +151,64 @@ public class LibraryPanel extends JPanel {
         refreshBooksGrid();
     }
 
+    private final java.util.Map<String, JButton> readButtons = new java.util.HashMap<>();
+    private final javax.swing.Timer arrivalTimer = new javax.swing.Timer(16, event -> updateArrival());
+    private boolean animateResults;
+    private long arrivalStarted;
+
+    void setAnimationsEnabled(boolean enabled) {
+        animateResults = enabled;
+        if (!enabled) endArrival();
+    }
+
+    void focusBook(String id) {
+        JButton button = readButtons.get(id);
+        if (button != null) {
+            button.scrollRectToVisible(new java.awt.Rectangle(0, 0, button.getWidth(), button.getHeight()));
+            button.requestFocusInWindow();
+        } else {
+            searchField.requestFocusInWindow();
+        }
+    }
+
+    private void refreshResults() {
+        refreshBooksGrid();
+        if (animateResults && isShowing()) {
+            arrivalStarted = System.nanoTime();
+            updateArrival();
+            arrivalTimer.restart();
+        }
+    }
+
+    private void updateArrival() {
+        if (!isShowing()) {
+            endArrival();
+            return;
+        }
+        float strength = Math.max(0, 1 - (System.nanoTime() - arrivalStarted) / 170_000_000f);
+        setArrival(strength);
+        if (strength == 0) arrivalTimer.stop();
+    }
+
+    private void endArrival() {
+        arrivalTimer.stop();
+        setArrival(0);
+    }
+
+    private void setArrival(float strength) {
+        java.awt.Rectangle visible = cardsGridPanel.getVisibleRect();
+        for (Component component : cardsGridPanel.getComponents()) {
+            if (component instanceof BookCard card && (strength == 0 || card.getBounds().intersects(visible))) {
+                card.setArrival(strength);
+            }
+        }
+    }
+
+    @Override public void removeNotify() {
+        endArrival();
+        super.removeNotify();
+    }
+
     private void rebuildFilterButtons() {
         filterBar.removeAll();
         addShelfFilterButton("Все книги", "ALL");
@@ -169,12 +227,14 @@ public class LibraryPanel extends JPanel {
         btn.addActionListener(e -> {
             activeShelfFilter = code;
             rebuildFilterButtons();
-            refreshBooksGrid();
+            refreshResults();
         });
         filterBar.add(btn);
     }
 
     public void refreshBooksGrid() {
+        endArrival();
+        readButtons.clear();
         cardsGridPanel.removeAll();
         List<Book> books = storageService.getFilteredBooks(activeShelfFilter, searchField.getText(), activeSortMode);
 
@@ -202,7 +262,7 @@ public class LibraryPanel extends JPanel {
     }
 
     private JPanel createBookCard(Book book) {
-        JPanel card = new JPanel(new BorderLayout(16, 0));
+        BookCard card = new BookCard(16, currentTheme.getTextPrimary(), currentTheme.getTextSecondary());
         card.setBackground(currentTheme.getCardBackground());
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(currentTheme.getBorder(), 1, true),
@@ -249,14 +309,14 @@ public class LibraryPanel extends JPanel {
 
         JButton readBtn = ModernUiFactory.createPrimaryButton(
                 book.getProgressPercent() > 0.5 ? "Продолжить чтение" : "Читать", currentTheme);
+        readButtons.put(book.getId(), readBtn);
         readBtn.addActionListener(e -> onOpenBook.accept(book));
 
         JButton favBtn = ModernUiFactory.createFlatButton(
                 book.isFavorite() ? "В избранном" : "В избранное", currentTheme);
         favBtn.addActionListener(e -> {
-            book.setFavorite(!book.isFavorite());
-            UiPersistenceErrors.save(this, "Не удалось сохранить изменение избранного.", storageService::saveState);
-            refreshBooksGrid();
+            UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить изменение избранного.",
+                    () -> storageService.toggleFavorite(book.getId()), this::refreshBooksGrid);
         });
 
         JButton infoBtn = ModernUiFactory.createFlatButton("О книге", currentTheme);
@@ -268,17 +328,8 @@ public class LibraryPanel extends JPanel {
                     "Убрать книгу «" + book.getTitle() + "» из библиотеки?",
                     "Удаление книги", JOptionPane.YES_NO_OPTION);
             if (ans == JOptionPane.YES_OPTION) {
-                try {
-                    storageService.removeBook(book, false);
-                } catch (java.io.UncheckedIOException ex) {
-                    java.util.logging.Logger.getLogger(LibraryPanel.class.getName())
-                            .log(java.util.logging.Level.WARNING, "Не удалось полностью сохранить изменение библиотеки", ex);
-                    JOptionPane.showMessageDialog(this,
-                            "Не удалось полностью сохранить изменение библиотеки. Проверьте состояние книги и настройки.\n" + ex.getMessage(),
-                            "Ошибка сохранения", JOptionPane.ERROR_MESSAGE);
-                } finally {
-                    refreshBooksGrid();
-                }
+                UiPersistenceErrors.defer(this, storageService, "Не удалось удалить книгу из библиотеки.",
+                        () -> storageService.removeBook(book, false), this::refreshBooksGrid);
             }
         });
 
@@ -298,6 +349,7 @@ public class LibraryPanel extends JPanel {
         infoPanel.add(actionsRow);
 
         card.add(infoPanel, BorderLayout.CENTER);
+        card.trackInteraction();
         return card;
     }
 

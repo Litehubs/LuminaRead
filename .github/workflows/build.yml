@@ -35,8 +35,8 @@ jobs:
           $artifact = Get-Item target/LuminaRead-2.0.0.jar
           $archive = [IO.Compression.ZipFile]::OpenRead($artifact.FullName)
           try {
-            $notices = @('LICENSE', 'licenses/twelvemonkeys/LICENSE.txt',
-              'licenses/twelvemonkeys/imageio-core.txt', 'licenses/twelvemonkeys/imageio-metadata.txt')
+            $notices = @('LICENSE') + @(Get-ChildItem licenses -Recurse -File -Filter '*.txt' |
+              ForEach-Object { [IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName).Replace('\', '/') })
             foreach ($notice in $notices) {
               $entry = $archive.GetEntry("META-INF/$notice")
               if ($null -eq $entry) { throw "Missing license notice: $notice" }

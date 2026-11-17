@@ -41,6 +41,27 @@ class CacheCleanupTest {
         assertTrue(Files.exists(outside));
     }
 
+    @Test void runtimeDiskBudgetKeepsAnExistingAssetAfterRejectedWrite() throws Exception {
+        var root = Files.createDirectories(temp.resolve(".luminaread/cache/books"));
+        Path previous = Files.writeString(root.resolve("a".repeat(64) + ".png"), "ok");
+        try (var filler = new java.io.RandomAccessFile(root.resolve("b".repeat(64) + ".png").toFile(), "rw")) {
+            filler.setLength(com.luminaread.util.GeneratedCache.MAX_BYTES - 4);
+        }
+        String home = System.getProperty("user.home");
+        try {
+            System.setProperty("user.home", temp.toString());
+            assertThrows(IOException.class, () -> com.luminaread.util.GeneratedCache.write(previous,
+                    output -> output.write(new byte[3])));
+            assertEquals("ok", Files.readString(previous));
+            try (var files = Files.list(root)) {
+                assertEquals(2, files.count(), "Partial writes must be removed");
+            }
+        } finally {
+            com.luminaread.util.GeneratedCache.invalidate(root.getParent());
+            System.setProperty("user.home", home);
+        }
+    }
+
     private static Path oldFile(Path file) throws IOException {
         Files.writeString(file, "old");
         Files.setLastModifiedTime(file, FileTime.from(Instant.EPOCH));

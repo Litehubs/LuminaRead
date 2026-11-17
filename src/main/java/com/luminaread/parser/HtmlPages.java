@@ -30,6 +30,29 @@ final class HtmlPages {
         this.limit = limit;
     }
 
+    static void checkDepth(String html) throws java.io.IOException {
+        var stack = new ArrayList<String>();
+        Matcher tokens = TOKEN.matcher(html);
+        int cursor = 0;
+        while (tokens.find(cursor)) {
+            cursor = tokens.end();
+            if (tokens.group(2) == null) {
+                int end = html.indexOf("-->", cursor);
+                if (end < 0) return;
+                cursor = end + 3;
+                continue;
+            }
+            String name = tokens.group(2).toLowerCase(Locale.ROOT);
+            if (!tokens.group(1).isEmpty()) {
+                int last = stack.lastIndexOf(name);
+                if (last >= 0) stack.subList(last, stack.size()).clear();
+            } else if (!VOID.contains(name) && !tokens.group().endsWith("/>")) {
+                stack.add(name);
+                if (stack.size() > 64) throw new java.io.IOException("Слишком много вложенных тегов в EPUB");
+            }
+        }
+    }
+
     List<String> split(String html) {
         Matcher tokens = TOKEN.matcher(html);
         int cursor = 0;

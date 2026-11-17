@@ -19,7 +19,7 @@ final class CatalogCard {
     static JPanel create(String titleText, String badgeText, String description, int descriptionLimit,
                          Color badgeColor, String actionText, Color actionColor,
                          Consumer<JLabel> loadCover, Runnable open, String removeLabel, Runnable remove) {
-        JPanel card = new JPanel(new BorderLayout(12, 0));
+        BookCard card = new BookCard(12, Color.WHITE, new Color(175, 182, 198));
         card.setBackground(new Color(31, 34, 45));
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(50, 55, 72), 1, true), new EmptyBorder(10, 10, 10, 10)));
@@ -70,6 +70,7 @@ final class CatalogCard {
         }
         card.add(cover, BorderLayout.WEST);
         card.add(right, BorderLayout.CENTER);
+        card.trackInteraction();
         return card;
     }
 }

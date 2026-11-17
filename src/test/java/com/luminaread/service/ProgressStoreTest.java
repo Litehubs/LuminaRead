@@ -48,6 +48,31 @@ class ProgressStoreTest {
         assertTrue(Files.exists(source));
     }
 
+    @Test void oldCheckpointsOpenAndAreUpgradedAfterTheFirstCapture() throws Exception {
+        var storage = new LibraryStorageService(home);
+        var book = storage.importBookFile(Files.writeString(home.resolve("book.txt"), "Readable text.").toFile(), false);
+        Path dir = Files.createDirectories(home.resolve(".luminaread/progress"));
+        Path file = dir.resolve(book.getId());
+        try (var out = new java.io.DataOutputStream(Files.newOutputStream(file))) {
+            out.writeInt(0x4c525001);
+            out.writeInt(2);
+            out.writeInt(3);
+            out.writeInt(40);
+            out.writeDouble(30);
+            out.writeBoolean(false);
+            out.writeLong(0);
+            out.writeLong(0);
+        }
+        var reopened = new LibraryStorageService(home);
+        var legacy = reopened.getAllBooks().get(0);
+        assertEquals(40, legacy.getScrollOffset());
+        assertEquals(-1, legacy.getTextOffset());
+        legacy.setTextOffset(128);
+        reopened.saveProgress(legacy);
+        reopened.flushProgress();
+        assertEquals(128, new LibraryStorageService(home).getAllBooks().get(0).getTextOffset());
+    }
+
     @Test void failedWriteIsRetriedAtCloseAndDamagedCheckpointFallsBack() throws Exception {
         var storage = new LibraryStorageService(home);
         var book = storage.importBookFile(Files.writeString(home.resolve("book.txt"), "Readable text.").toFile(), false);

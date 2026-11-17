@@ -10,9 +10,15 @@ public class Chapter implements Serializable {
     private final String htmlContent;
     private final String plainText;
     private final int wordCount;
+    private final String sourcePath;
 
     public Chapter(int index, String title, String htmlContent, String plainText) {
+        this(index, title, htmlContent, plainText, null);
+    }
+
+    public Chapter(int index, String title, String htmlContent, String plainText, String sourcePath) {
         this.index = index;
+        this.sourcePath = sourcePath;
         this.title = (title == null || title.isBlank()) ? ("Глава " + (index + 1)) : title.trim();
         this.htmlContent = htmlContent != null ? htmlContent : "";
         this.plainText = plainText != null ? plainText : "";
@@ -42,6 +48,7 @@ public class Chapter implements Serializable {
     public String getTitle() { return title; }
     public String getHtmlContent() { return htmlContent; }
     public String getPlainText() { return plainText; }
+    public String getSourcePath() { return sourcePath; }
     public int getWordCount() { return wordCount; }
 
     @Override
