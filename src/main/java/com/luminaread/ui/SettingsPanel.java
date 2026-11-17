@@ -470,7 +470,7 @@ public class SettingsPanel extends JPanel {
     }
 
     private void saveSettings() {
-        UiPersistenceErrors.save(this, "Настройки применены, но сохранить их полностью не удалось.",
+        UiPersistenceErrors.defer(this, storageService, "Настройки применены, но сохранить их полностью не удалось.",
                 storageService::saveState);
     }
 

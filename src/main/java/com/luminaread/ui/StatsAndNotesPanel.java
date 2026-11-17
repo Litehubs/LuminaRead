@@ -195,13 +195,13 @@ public class StatsAndNotesPanel extends JPanel {
 
         JButton goBtn = ModernUiFactory.createFlatButton("Перейти", currentTheme);
         goBtn.addActionListener(e -> onJumpToBookPosition.accept(bm.getBookId(),
-                new ReadingPosition(bm.getChapterIndex(), bm.getPageIndex(), bm.getScrollOffset())));
+                new ReadingPosition(bm.getChapterIndex(), bm.getPageIndex(), bm.getScrollOffset(),
+                        bm.getTextOffset(), bm.getId())));
 
         JButton delBtn = ModernUiFactory.createFlatButton("Удалить", currentTheme);
         delBtn.addActionListener(e -> {
-            UiPersistenceErrors.save(this, "Не удалось сохранить удаление закладки.",
-                    () -> storageService.removeBookmark(bm.getId()));
-            refreshData();
+            UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить удаление закладки.",
+                    () -> storageService.removeBookmark(bm.getId()), this::refreshData);
         });
 
         btns.add(goBtn);
@@ -237,9 +237,8 @@ public class StatsAndNotesPanel extends JPanel {
 
         JButton delBtn = ModernUiFactory.createFlatButton("Удалить", currentTheme);
         delBtn.addActionListener(e -> {
-            UiPersistenceErrors.save(this, "Не удалось сохранить удаление цитаты.",
-                    () -> storageService.removeHighlight(hl.getId()));
-            refreshData();
+            UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить удаление цитаты.",
+                    () -> storageService.removeHighlight(hl.getId()), this::refreshData);
         });
 
         btns.add(goBtn);

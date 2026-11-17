@@ -199,7 +199,7 @@ public class OnlineCatalogPanel extends JPanel {
         String opdsUrl = customUrlField.getText().trim();
         if (opdsUrl.isEmpty()) return;
         storageService.getSettings().addCustomOpdsCatalog(opdsUrl);
-        UiPersistenceErrors.save(this, "Не удалось сохранить каталог в настройках.", storageService::saveState);
+        UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить каталог в настройках.", storageService::saveState);
 
         statusLabel.setText("Загрузка OPDS-каталога: " + opdsUrl + " ...");
         searchProgressBar.setIndeterminate(true);

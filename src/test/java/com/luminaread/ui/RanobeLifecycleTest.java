@@ -4,7 +4,6 @@ import com.luminaread.service.RanobeService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import javax.swing.SwingUtilities;
-import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,12 +18,10 @@ final class RanobeLifecycleTest {
     }
 
     private void runProbe(Path home, Class<?> probe) throws Exception {
-        String main = Path.of(RanobePanel.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        String tests = Path.of(getClass().getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
         Path log = home.resolve("probe.log");
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-Duser.home=" + home,
-                "-cp", main + File.pathSeparator + tests, probe.getName())
+                "-cp", System.getProperty("java.class.path"), probe.getName())
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
         try {
             assertTrue(process.waitFor(20, TimeUnit.SECONDS), () -> "Ranobe probe timed out: " + readLog(log));

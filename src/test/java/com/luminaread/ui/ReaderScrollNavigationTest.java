@@ -14,7 +14,6 @@ import java.awt.Container;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import java.awt.image.BufferedImage;
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
@@ -27,12 +26,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ReaderScrollNavigationTest {
     @Test
     void wheelOpensAdjacentImagePagesWhenTheWholePageFits(@TempDir Path home) throws Exception {
-        String main = Path.of(ReaderPanel.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        String tests = Path.of(getClass().getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
         Path log = home.resolve("reader-scroll.log");
         Process child = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-Duser.home=" + home,
-                "-cp", main + File.pathSeparator + tests, Probe.class.getName())
+                "-cp", System.getProperty("java.class.path"), Probe.class.getName())
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
         try {
             assertTrue(child.waitFor(25, TimeUnit.SECONDS), "Reader scroll probe timed out");

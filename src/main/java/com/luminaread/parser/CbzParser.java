@@ -98,16 +98,18 @@ public class CbzParser implements BookParser {
                         Path target = cacheDir.resolve(safeName);
                         target.toFile().deleteOnExit();
                         if (bi != null) {
-                            javax.imageio.ImageIO.write(bi, "png", target.toFile());
+                            com.luminaread.util.GeneratedCache.write(target, out -> {
+                                if (!javax.imageio.ImageIO.write(bi, "png", out)) throw new IOException("Нет кодировщика PNG");
+                            });
                             pages.add(new PageImg(entry.getName(), target));
                         } else {
-                            Files.write(target, imgBytes);
+                            com.luminaread.util.GeneratedCache.write(target, out -> out.write(imgBytes));
                             pages.add(new PageImg(entry.getName(), target));
                         }
                     } else {
                         Path target = cacheDir.resolve(safeName);
                         target.toFile().deleteOnExit();
-                        Files.write(target, imgBytes);
+                        com.luminaread.util.GeneratedCache.write(target, out -> out.write(imgBytes));
                         pages.add(new PageImg(entry.getName(), target));
                     }
                 }
@@ -120,6 +122,7 @@ public class CbzParser implements BookParser {
                     for (Path cached : files.toList()) Files.deleteIfExists(cached);
                 } finally {
                     Files.deleteIfExists(cacheDir);
+                    com.luminaread.util.GeneratedCache.invalidate(cacheRoot);
                 }
             }
         }

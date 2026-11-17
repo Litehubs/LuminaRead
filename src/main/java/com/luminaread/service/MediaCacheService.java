@@ -2,17 +2,13 @@ package com.luminaread.service;
 
 import javax.imageio.ImageIO;
 import com.luminaread.util.ImageSizeGuard;
-import com.luminaread.util.TimedInput;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -61,12 +57,18 @@ public class MediaCacheService implements IMediaCacheService {
     }
 
     private final int maxImageBytes;
+    private final ImageUrlPolicy imageUrls;
 
     public MediaCacheService() { this(DEFAULT_MAX_IMAGE_BYTES); }
 
     MediaCacheService(int maxImageBytes) {
+        this(maxImageBytes, new ImageUrlPolicy(java.net.InetAddress::getAllByName, false));
+    }
+
+    MediaCacheService(int maxImageBytes, ImageUrlPolicy imageUrls) {
         if (maxImageBytes <= 0) throw new IllegalArgumentException("Image size limit must be positive");
         this.maxImageBytes = maxImageBytes;
+        this.imageUrls = imageUrls;
     }
 
     public static MediaCacheService getInstance() {
@@ -178,14 +180,17 @@ public class MediaCacheService implements IMediaCacheService {
                 }
 
                 try {
-                    ImageIO.write(bi, "png", cachedPng);
+                    BufferedImage resolved = bi;
+                    com.luminaread.util.GeneratedCache.write(cachedPng.toPath(), out -> {
+                        if (!ImageIO.write(resolved, "png", out)) throw new java.io.IOException("Нет кодировщика PNG");
+                    });
                     return new CachedImageInfo(cachedPng.toURI().toString(), bi.getWidth(), bi.getHeight());
                 } catch (Exception | LinkageError ex) {
                     logFallback("Не удалось сохранить изображение в кэш", ex);
                 }
             } else {
                 try {
-                    Files.write(cachedPng.toPath(), bytes);
+                    com.luminaread.util.GeneratedCache.write(cachedPng.toPath(), out -> out.write(bytes));
                     return new CachedImageInfo(cachedPng.toURI().toString(), 0, 0);
                 } catch (Exception ex) {
                     logFallback("Не удалось сохранить исходное изображение в кэш", ex);
@@ -267,69 +272,7 @@ public class MediaCacheService implements IMediaCacheService {
     }
 
     public byte[] downloadImageBytes(String urlStr, String referer) {
-        HttpURLConnection conn = null;
-        try {
-            URL url = URI.create(urlStr).toURL();
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty("User-Agent", BROWSER_UA);
-            conn.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/png,image/jpeg,image/*,*/*;q=0.8");
-
-            String host = url.getHost() == null ? "" : url.getHost().toLowerCase(Locale.ROOT);
-            if (referer != null && !referer.isEmpty()) {
-                conn.setRequestProperty("Referer", referer);
-                try {
-                    URI refUri = URI.create(referer);
-                    if (refUri.getScheme() != null && refUri.getHost() != null) {
-                        conn.setRequestProperty("Origin", refUri.getScheme() + "://" + refUri.getHost());
-                    }
-                } catch (IllegalArgumentException ex) {
-                    logFallback("Некорректный адрес источника изображения", ex);
-                }
-            } else {
-                if (isMangaLibUrl(host) || isMangaLibUrl(urlStr)) {
-                    conn.setRequestProperty("Referer", MGL_ORIGIN + "/");
-                    conn.setRequestProperty("Origin", MGL_ORIGIN);
-                } else if (host.contains("remanga") || host.contains("reimg")) {
-                    conn.setRequestProperty("Referer", REMANGA_ORIGIN + "/");
-                    conn.setRequestProperty("Origin", REMANGA_ORIGIN);
-                } else if (host.contains("mangadex")) {
-                    conn.setRequestProperty("Referer", MANGADEX_ORIGIN + "/");
-                } else if (host.contains("ranobelib")) {
-                    conn.setRequestProperty("Referer", RANOBE_ORIGIN + "/");
-                    conn.setRequestProperty("Origin", RANOBE_ORIGIN);
-                }
-            }
-
-            conn.setConnectTimeout(8000);
-            conn.setReadTimeout(20000);
-
-            int code = conn.getResponseCode();
-            if (code >= 200 && code < 300) {
-                if (conn.getContentLengthLong() > maxImageBytes) {
-                    throw new java.io.IOException("Image response exceeds size limit");
-                }
-                try (InputStream is = new TimedInput(conn.getInputStream(), java.time.Duration.ofSeconds(30));
-                     ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                    byte[] buf = new byte[8192];
-                    int r;
-                    long total = 0;
-                    while ((r = is.read(buf)) != -1) {
-                        total += r;
-                        if (total > maxImageBytes) throw new java.io.IOException("Image response exceeds size limit");
-                        baos.write(buf, 0, r);
-                    }
-                    return baos.toByteArray();
-                }
-            }
-        } catch (Exception | LinkageError ex) {
-            logFallback("Не удалось загрузить изображение", ex);
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
-        }
-        return null;
+        return RemoteImageFetcher.fetch(urlStr, referer, imageUrls, maxImageBytes);
     }
 
     public static BufferedImage tryDecodeWithSips(byte[] bytes) {

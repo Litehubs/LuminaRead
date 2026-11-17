@@ -76,3 +76,5 @@ LuminaRead открывает вход в системном браузере и
 Условия использования LuminaRead указаны в файле [LICENSE](LICENSE). В собранном JAR этот файл находится в `META-INF/LICENSE`.
 
 Декодер WebP TwelveMonkeys распространяется на условиях BSD-3-Clause. Исходные уведомления [TwelveMonkeys 3.15.0](https://github.com/haraldk/TwelveMonkeys/tree/twelvemonkeys-3.15.0) лежат в [licenses/twelvemonkeys](licenses/twelvemonkeys) и включены в JAR в `META-INF/licenses/twelvemonkeys/`.
+
+Сетевой клиент изображений использует Apache HttpComponents под Apache License 2.0 и SLF4J под лицензией MIT. Их лицензии и уведомления находятся в [licenses/apache-httpcomponents](licenses/apache-httpcomponents) и [licenses/slf4j](licenses/slf4j). Сборка включает их в каталоги `META-INF/licenses/` внутри JAR.

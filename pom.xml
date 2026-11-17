@@ -18,6 +18,17 @@
 
     <dependencies>
         <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+            <version>5.6.4</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-nop</artifactId>
+            <version>1.7.36</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
             <groupId>com.twelvemonkeys.imageio</groupId>
             <artifactId>imageio-webp</artifactId>
             <version>3.15.0</version>
@@ -40,7 +51,7 @@
                 <targetPath>META-INF</targetPath>
                 <includes>
                     <include>LICENSE</include>
-                    <include>licenses/twelvemonkeys/*.txt</include>
+                    <include>licenses/**/*.txt</include>
                 </includes>
             </resource>
         </resources>

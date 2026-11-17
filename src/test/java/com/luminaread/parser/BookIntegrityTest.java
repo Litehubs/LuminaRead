@@ -92,6 +92,16 @@ class BookIntegrityTest {
         assertTrue(joined.contains("<img src=") && joined.indexOf("<img src=") < joined.indexOf("After image."));
     }
 
+    @Test void epubRejectsDeepMarkupBeforeTheReaderBuildsAView() throws Exception {
+        Path file = dir.resolve("deep.epub");
+        try (var zip = new ZipOutputStream(Files.newOutputStream(file))) {
+            zip.putNextEntry(new ZipEntry("deep.xhtml"));
+            zip.write(("<div>".repeat(2500) + "text" + "</div>".repeat(2500)).getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        assertThrows(java.io.IOException.class, () -> new EpubParser().parse(file.toFile()));
+    }
+
     @Test void detectedFormatTakesPriorityOverMisleadingExtension() throws Exception {
         var registry = new BookParserRegistry();
         assertInstanceOf(EpubParser.class, registry.findParser(dir.resolve("book.fb2").toFile(), "EPUB").orElseThrow());

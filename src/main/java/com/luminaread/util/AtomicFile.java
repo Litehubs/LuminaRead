@@ -23,6 +23,9 @@ public final class AtomicFile {
             try (OutputStream output = Files.newOutputStream(temporary)) {
                 writer.write(output);
             }
+            if (Thread.currentThread().isInterrupted()) {
+                throw new java.io.InterruptedIOException("Запись отменена до публикации файла");
+            }
             try {
                 Files.move(temporary, absolute, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException ex) {

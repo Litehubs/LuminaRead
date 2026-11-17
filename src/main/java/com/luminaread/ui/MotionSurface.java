@@ -22,6 +22,7 @@ class MotionSurface extends JPanel {
         }
     }
 
+    private static final boolean TRACE = Boolean.getBoolean("luminaread.motion.trace");
     private static final long MAX_SNAPSHOT_PIXELS = 2_500_000;
     private static final int FRAME_INTERVAL_MS = 16;
     private static final int SLIDE_DISTANCE = 18;
@@ -42,7 +43,9 @@ class MotionSurface extends JPanel {
             return;
         }
 
+        long started = TRACE ? System.nanoTime() : 0;
         BufferedImage snapshot = capture(width, height);
+        if (TRACE) logTiming("snapshot", effect, started);
         try {
             update.run();
             if (frame == null && animationsEnabled && isShowing() && sameSize(width, height)) {
@@ -53,6 +56,7 @@ class MotionSurface extends JPanel {
             }
         } finally {
             if (frame == null || frame.image() != snapshot) snapshot.flush();
+            if (TRACE) logTiming("transition", effect, started);
         }
     }
 
@@ -109,6 +113,7 @@ class MotionSurface extends JPanel {
 
     @Override
     protected void paintChildren(Graphics graphics) {
+        long started = TRACE ? System.nanoTime() : 0;
         super.paintChildren(graphics);
         if (frame == null || isPaintingForPrint() || !sameSize(frame.width(), frame.height())) return;
 
@@ -120,7 +125,12 @@ class MotionSurface extends JPanel {
             paintFrame(overlay, frame.effect(), frame.image(), frame.width(), frame.height(), frame.direction(), progress);
         } finally {
             overlay.dispose();
+            if (TRACE) logTiming("paint", frame.effect(), started);
         }
+    }
+
+    private static void logTiming(String step, Effect effect, long started) {
+        System.out.println("motion " + step + " " + effect + " " + (System.nanoTime() - started));
     }
 
     // The previous view is composited over the destination. There are no live component transforms.

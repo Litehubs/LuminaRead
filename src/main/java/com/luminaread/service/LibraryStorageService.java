@@ -78,18 +78,33 @@ public class LibraryStorageService {
     private final ProgressStore progress;
     private final Set<String> bookIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private PersistentState state;
+    private volatile Shelf shelf;
+    private final java.util.concurrent.Executor writer = new java.util.concurrent.ThreadPoolExecutor(
+            0, 1, 2, java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.LinkedBlockingQueue<>(), task -> {
+                Thread thread = new Thread(task, "LuminaRead-Library");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    private record Shelf(List<Book> books, List<Bookmark> bookmarks, List<Highlight> highlights) {}
+
+    private void publishShelf() {
+        shelf = new Shelf(List.copyOf(state.books), List.copyOf(state.bookmarks), List.copyOf(state.highlights));
+    }
+
+    public java.util.concurrent.CompletableFuture<Void> writeAsync(Runnable command) {
+        return java.util.concurrent.CompletableFuture.runAsync(command, writer);
+    }
+
+    public void awaitWrites() throws InterruptedException, java.util.concurrent.ExecutionException {
+        writeAsync(() -> {}).get();
+    }
 
     private final WeightedCache<String, BookContent> parsedBookCache =
             new WeightedCache<>(8, 64L * 1024 * 1024);
 
     private void cacheBook(Book book, BookContent content) {
-        long bytes = content.getCoverImage() == null ? 0 : content.getCoverImage().length;
-        for (byte[] image : content.getEmbeddedImages().values()) bytes += image.length;
-        for (Chapter chapter : content.getChapters()) {
-            bytes += 128 + 2L * (chapter.getHtmlContent().length() + chapter.getPlainText().length()
-                    + chapter.getTitle().length());
-        }
-        parsedBookCache.put(book.getId(), content, bytes);
+        parsedBookCache.put(book.getId(), content, content.estimatedBytes());
     }
 
     public LibraryStorageService() {
@@ -103,6 +118,7 @@ public class LibraryStorageService {
         this.progress = new ProgressStore(dataDir.resolve("progress"));
         initDirectories();
         loadState();
+        publishShelf();
     }
 
     private void initDirectories() {
@@ -204,6 +220,7 @@ public class LibraryStorageService {
         change.run();
         try {
             saveState();
+            publishShelf();
         } catch (UncheckedIOException | SecurityException ex) {
             list.clear();
             list.addAll(before);
@@ -220,16 +237,11 @@ public class LibraryStorageService {
     }
 
     public List<Book> getAllBooks() {
-        synchronized (this) {
-            return new ArrayList<>(state.books);
-        }
+        return new ArrayList<>(shelf.books());
     }
 
     public List<Book> getFilteredBooks(String shelfFilter, String searchQuery, String sortMode) {
-        List<Book> booksSnapshot;
-        synchronized (this) {
-            booksSnapshot = new ArrayList<>(state.books);
-        }
+        List<Book> booksSnapshot = shelf.books();
         String q = searchQuery != null ? searchQuery.trim().toLowerCase(Locale.ROOT) : "";
         List<Book> filtered = booksSnapshot.stream()
                 .filter(b -> {
@@ -464,15 +476,44 @@ public class LibraryStorageService {
         }
     }
 
+    public synchronized void migrateBookmark(String id, int offset) {
+        for (Bookmark bookmark : state.bookmarks) {
+            if (!bookmark.getId().equals(id) || bookmark.getTextOffset() >= 0) continue;
+            bookmark.setTextOffset(offset);
+            try {
+                saveState();
+            } catch (UncheckedIOException | SecurityException ex) {
+                bookmark.setTextOffset(-1);
+                throw ex;
+            }
+            return;
+        }
+    }
+
+    public synchronized void toggleFavorite(String bookId) {
+        for (Book book : state.books) {
+            if (!book.getId().equals(bookId)) continue;
+            boolean previous = book.isFavorite();
+            book.setFavorite(!previous);
+            try {
+                saveState();
+            } catch (UncheckedIOException | SecurityException ex) {
+                book.setFavorite(previous);
+                throw ex;
+            }
+            return;
+        }
+    }
+
     public synchronized void removeBookmark(String bookmarkId) {
         changeList(state.bookmarks, () -> state.bookmarks.removeIf(b -> b.getId().equals(bookmarkId)));
     }
 
-    public synchronized List<Bookmark> getBookmarks(String bookIdFilter) {
+    public List<Bookmark> getBookmarks(String bookIdFilter) {
         if (bookIdFilter == null || bookIdFilter.isBlank()) {
-            return new ArrayList<>(state.bookmarks);
+            return new ArrayList<>(shelf.bookmarks());
         }
-        return state.bookmarks.stream()
+        return shelf.bookmarks().stream()
                 .filter(b -> bookIdFilter.equals(b.getBookId()))
                 .collect(Collectors.toList());
     }
@@ -487,11 +528,11 @@ public class LibraryStorageService {
         changeList(state.highlights, () -> state.highlights.removeIf(h -> h.getId().equals(highlightId)));
     }
 
-    public synchronized List<Highlight> getHighlights(String bookIdFilter) {
+    public List<Highlight> getHighlights(String bookIdFilter) {
         if (bookIdFilter == null || bookIdFilter.isBlank()) {
-            return new ArrayList<>(state.highlights);
+            return new ArrayList<>(shelf.highlights());
         }
-        return state.highlights.stream()
+        return shelf.highlights().stream()
                 .filter(h -> bookIdFilter.equals(h.getBookId()))
                 .collect(Collectors.toList());
     }

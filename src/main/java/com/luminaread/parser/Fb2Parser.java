@@ -172,10 +172,10 @@ public class Fb2Parser implements BookParser {
             if (tags.group(1).isEmpty()) {
                 if (depth++ == 0) {
                     if (tags.start() > consumed) sections.add(body.substring(consumed, tags.start()));
-                    start = tags.end();
+                    start = tags.start();
                 }
             } else if (depth > 0 && --depth == 0) {
-                sections.add(body.substring(start, tags.start()));
+                sections.add(body.substring(start, tags.end()));
                 consumed = tags.end();
             }
         }
@@ -214,7 +214,6 @@ public class Fb2Parser implements BookParser {
                 content.setCoverImage(imgBytes);
                 coverFound = true;
             }
-            content.putEmbeddedImage(id, imgBytes);
             Path target = BookImages.save(imgBytes, extForType(type, id));
             uriById.put(id, target.toUri().toString());
         }
@@ -268,6 +267,7 @@ public class Fb2Parser implements BookParser {
         s = s.replaceAll("(?i)<empty-line\\s*/?>", "<p>&nbsp;</p>");
         s = s.replaceAll("(?i)(<a\\s[^>]*?\\s?)(?:xlink:|l:)href(\\s*=\\s*[\"']#)",
                 "$1href$2");
+        s = s.replaceAll("(?i)<(/?)section\\b([^>]*)>", "<$1div$2>");
         s = keepAllowedTags(s);
         s = s.replaceAll("[ \\t\\f\\r]+", " ");
         s = s.replaceAll(" *\\n *", "\n");

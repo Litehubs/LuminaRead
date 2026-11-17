@@ -122,6 +122,10 @@ final class ReaderHtmlKit extends HTMLEditorKit {
                 if (!style.isEmpty()) clean.addAttribute(key, style);
             }
         }
+        if (tag == HTML.Tag.A && !clean.isDefined(HTML.Attribute.ID)
+                && source.isDefined(HTML.Attribute.NAME)) {
+            clean.addAttribute(HTML.Attribute.ID, source.getAttribute(HTML.Attribute.NAME));
+        }
         return clean;
     }
 

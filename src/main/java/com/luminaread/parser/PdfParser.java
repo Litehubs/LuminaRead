@@ -5,8 +5,6 @@ import com.luminaread.model.Chapter;
 import com.luminaread.util.HtmlSanitizer;
 import com.luminaread.util.Json;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,7 +16,10 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 public class PdfParser implements BookParser {
-    private static final long MAX_EXTRACTED_TEXT_BYTES = 128L * 1024 * 1024;
+    private static final long MAX_SOURCE_BYTES = 512L * 1024 * 1024;
+    private static final long MAX_EXTRACTED_TEXT_BYTES = 16L * 1024 * 1024;
+    private static final long MAX_THUMBNAIL_BYTES = 96L * 1024 * 1024;
+    private static final int MAX_PAGES = 5000;
 
     @Override
     public boolean supports(File file, String formatHint) {
@@ -43,6 +44,10 @@ public class PdfParser implements BookParser {
         }
         if (file.length() == 0) {
             throw new IllegalArgumentException("PDF-файл пустой.");
+        }
+
+        if (Files.size(file.toPath()) > MAX_SOURCE_BYTES) {
+            throw new java.io.IOException("PDF превышает допустимый размер");
         }
 
         BookContent content = new BookContent();
@@ -72,10 +77,11 @@ public class PdfParser implements BookParser {
     private boolean extractWithPdfKit(File pdfFile, BookContent content) {
         Path tempOutput = null;
         Path tempError = null;
+        Path stagedImages = null;
         Process process = null;
         try {
             Path cacheDir = pdfCacheDirectory(pdfFile);
-            Files.createDirectories(cacheDir);
+            stagedImages = Files.createTempDirectory("luminaread-pdf-pages-");
             tempOutput = Files.createTempFile("luminaread-pdf-text-", ".txt");
             tempError = Files.createTempFile("luminaread-pdf-error-", ".log");
 
@@ -86,32 +92,65 @@ public class PdfParser implements BookParser {
                     var args = $.NSProcessInfo.processInfo.arguments;
                     var pdfPath = ObjC.unwrap(args.objectAtIndex(5));
                     var outDir = ObjC.unwrap(args.objectAtIndex(6));
+                    var thumbLimit = Number(ObjC.unwrap(args.objectAtIndex(7)));
+                    var textLimit = Number(ObjC.unwrap(args.objectAtIndex(8)));
+                    var pageLimit = Number(ObjC.unwrap(args.objectAtIndex(9)));
                     var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(pdfPath));
                     if (!doc) throw new Error('Cannot open PDF');
+                    if (doc.pageCount > pageLimit) throw new Error('PDF page limit');
                     var output = $.NSFileHandle.fileHandleWithStandardOutput;
+                    var thumbBytes = 0, textBytes = 0;
                     for (var i = 0; i < doc.pageCount; i++) {
                         var page = doc.pageAtIndex(i);
                         var txt = page.string ? ObjC.unwrap(page.string) : '';
-                        txt = txt ? txt : '';
-                        // Render every page, not just scanned pages. A PDF text layer loses
-                        // layout and embedded images when flattened into paragraphs.
-                        var img = page.thumbnailOfSizeForBox($.NSMakeSize(1100, 1500), $.kPDFDisplayBoxMediaBox);
-                        if (img) {
-                            var data = $.NSData.dataWithData(img.TIFFRepresentation);
-                            data.writeToFileAtomically(outDir + '/page_' + (i + 1) + '.tiff', true);
+                        var line = JSON.stringify([i + 1, txt || '']) + '\\n';
+                        var encoded = $(line).dataUsingEncoding($.NSUTF8StringEncoding);
+                        var encodedBytes = Number(encoded.length);
+                        if (encodedBytes > textLimit - textBytes) throw new Error('PDF text limit');
+                        textBytes += encodedBytes;
+                        output.writeData(encoded);
+                        if (thumbBytes >= thumbLimit) continue;
+                        var width = 1100, height = 1500;
+                        var img = page.thumbnailOfSizeForBox($.NSMakeSize(width, height), $.kPDFDisplayBoxMediaBox);
+                        if (!img) continue;
+                        var bitmap = $.NSBitmapImageRep.imageRepWithData(img.TIFFRepresentation);
+                        var data = bitmap.representationUsingTypeProperties($.NSPNGFileType, $({}));
+                        var bytes = data ? Number(data.length) : 0;
+                        var extension = '.png';
+                        var share = Math.floor((thumbLimit - thumbBytes) / (doc.pageCount - i));
+                        if (bytes > share) {
+                            var jpegOptions = $({'NSImageCompressionFactor': 0.55});
+                            data = bitmap.representationUsingTypeProperties($.NSJPEGFileType, jpegOptions);
+                            bytes = data ? Number(data.length) : 0;
+                            extension = '.jpg';
+                            for (var attempt = 0; bytes > share && width > 320 && attempt < 4; attempt++) {
+                                var scale = Math.min(0.8, 0.9 * Math.sqrt(share / bytes));
+                                width = Math.max(320, Math.floor(width * scale));
+                                height = Math.round(width * 1500 / 1100);
+                                img = page.thumbnailOfSizeForBox($.NSMakeSize(width, height), $.kPDFDisplayBoxMediaBox);
+                                bitmap = $.NSBitmapImageRep.imageRepWithData(img.TIFFRepresentation);
+                                data = bitmap.representationUsingTypeProperties($.NSJPEGFileType, jpegOptions);
+                                bytes = data ? Number(data.length) : 0;
+                            }
                         }
-                        var pageText = JSON.stringify([i + 1, txt]) + '\\n';
-                        output.writeData($(pageText).dataUsingEncoding($.NSUTF8StringEncoding));
+                        if (bytes > 0 && bytes <= thumbLimit - thumbBytes) {
+                            if (data.writeToFileAtomically(outDir + '/page_' + (i + 1) + extension, true)) {
+                                thumbBytes += bytes;
+                            }
+                        } else {
+                            thumbBytes = thumbLimit;
+                        }
                     }
                     '';
                     """;
 
             ProcessBuilder pb = new ProcessBuilder("/usr/bin/osascript", "-l", "JavaScript", "-e", script,
-                    pdfFile.getAbsolutePath(), cacheDir.toAbsolutePath().toString());
+                    pdfFile.getAbsolutePath(), stagedImages.toAbsolutePath().toString(), Long.toString(MAX_THUMBNAIL_BYTES),
+                    Long.toString(MAX_EXTRACTED_TEXT_BYTES), Integer.toString(MAX_PAGES));
             pb.redirectOutput(tempOutput.toFile());
             pb.redirectError(tempError.toFile());
             process = pb.start();
-            if (!process.waitFor(60, TimeUnit.SECONDS)) {
+            if (!waitForOutput(process, tempOutput, tempError, 60)) {
                 process.destroyForcibly();
                 process.waitFor(2, TimeUnit.SECONDS);
                 return false;
@@ -123,8 +162,8 @@ public class PdfParser implements BookParser {
                 return false;
             }
 
-            convertCachedThumbnails(cacheDir);
-            Path cover = cacheDir.resolve("page_1.png");
+            publishThumbnails(stagedImages, cacheDir);
+            Path cover = pageImage(cacheDir, 1);
             if (Files.isRegularFile(cover) && Files.size(cover) <= 20L * 1024 * 1024) {
                 content.setCoverImage(Files.readAllBytes(cover));
             }
@@ -141,27 +180,43 @@ public class PdfParser implements BookParser {
             if (process != null && process.isAlive()) process.destroyForcibly();
             deleteTemporaryFile(tempOutput);
             deleteTemporaryFile(tempError);
+            deleteStaging(stagedImages);
         }
     }
 
-    private void convertCachedThumbnails(Path cacheDir) {
-        try (var files = Files.newDirectoryStream(cacheDir, "page_*.tiff")) {
-            for (Path tiff : files) {
-                Path png = tiff.resolveSibling(tiff.getFileName().toString().replaceFirst("\\.tiff$", ".png"));
+    private static boolean waitForOutput(Process process, Path output, Path diagnostics, int seconds)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+        while (!process.waitFor(100, TimeUnit.MILLISECONDS)) {
+            if (System.nanoTime() >= deadline || Files.size(output) > MAX_EXTRACTED_TEXT_BYTES
+                    || Files.size(diagnostics) > 1024 * 1024) return false;
+        }
+        return true;
+    }
+
+    private void publishThumbnails(Path staged, Path cache) throws java.io.IOException {
+        try (var files = Files.newDirectoryStream(staged, "page_*.*")) {
+            for (Path source : files) {
+                if (Files.size(source) > 20L * 1024 * 1024) continue;
+                Path target = cache.resolve(source.getFileName());
                 try {
-                    if (com.luminaread.util.ImageSizeGuard.inspect(tiff.toFile())
-                            != com.luminaread.util.ImageSizeGuard.Result.ACCEPTABLE) continue;
-                    BufferedImage image = ImageIO.read(tiff.toFile());
-                    if (image != null) ImageIO.write(image, "png", png.toFile());
-                } catch (Exception ex) {
-                    logPdfFallback("Не удалось преобразовать миниатюру PDF", ex);
-                } finally {
-                    Files.deleteIfExists(tiff);
+                    com.luminaread.util.GeneratedCache.write(target, out -> Files.copy(source, out));
+                } catch (java.io.IOException ex) {
+                    logPdfFallback("Не удалось сохранить миниатюру PDF", ex);
+                    return;
                 }
             }
-        } catch (Exception ex) {
-            logPdfFallback("Не удалось обработать миниатюры PDF", ex);
         }
+    }
+
+    private void deleteStaging(Path staged) {
+        if (staged == null) return;
+        try (var paths = Files.newDirectoryStream(staged)) {
+            for (Path path : paths) Files.deleteIfExists(path);
+        } catch (java.io.IOException ex) {
+            logPdfFallback("Не удалось очистить временные миниатюры", ex);
+        }
+        deleteTemporaryFile(staged);
     }
 
     private void readPdfKitPages(Path textFile, Path cacheDir, BookContent content) throws Exception {
@@ -186,10 +241,15 @@ public class PdfParser implements BookParser {
         chapters.forEach(content::addChapter);
     }
 
+    private static Path pageImage(Path cache, int number) {
+        Path png = cache.resolve("page_" + number + ".png");
+        return Files.isRegularFile(png) ? png : cache.resolve("page_" + number + ".jpg");
+    }
+
     private void appendPage(int pageNumber, String rawText, Path cacheDir,
                             StringBuilder html, StringBuilder plain) throws Exception {
         String text = rawText == null ? "" : rawText.strip();
-        Path pageImage = cacheDir.resolve("page_" + pageNumber + ".png");
+        Path pageImage = pageImage(cacheDir, pageNumber);
         boolean hasImage = Files.isRegularFile(pageImage) && Files.size(pageImage) <= 20L * 1024 * 1024;
 
         html.append("<h3>Страница ").append(pageNumber).append("</h3>\n");
@@ -217,7 +277,8 @@ public class PdfParser implements BookParser {
             }
         } else {
             if (!plain.isEmpty()) plain.append('\n');
-            plain.append("[На странице ").append(pageNumber).append(" нет текстового слоя]");
+            plain.append("Страница ").append(pageNumber).append(" недоступна без изображения.");
+            html.append("<p>").append(plain).append("</p>");
         }
     }
 
@@ -232,7 +293,7 @@ public class PdfParser implements BookParser {
             pb.redirectOutput(tempOutput.toFile());
             pb.redirectError(tempError.toFile());
             process = pb.start();
-            if (!process.waitFor(30, TimeUnit.SECONDS)) {
+            if (!waitForOutput(process, tempOutput, tempError, 30)) {
                 process.destroyForcibly();
                 process.waitFor(2, TimeUnit.SECONDS);
                 return null;
@@ -308,7 +369,7 @@ public class PdfParser implements BookParser {
     }
 
     private Path pdfCacheDirectory(File file) throws Exception {
-        String identity = file.getCanonicalPath() + "|" + file.length() + "|" + file.lastModified();
+        String identity = file.getCanonicalPath() + "|" + file.length() + "|" + file.lastModified() + "|budget-v3";
         String cacheKey = UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
         return Path.of(System.getProperty("user.home"), ".luminaread", "cache", "pdf_" + cacheKey);
     }
