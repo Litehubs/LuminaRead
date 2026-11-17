@@ -9,6 +9,33 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TtsLifecycleTest {
+    @Test void stopCallbackRunsOutsideMonitorAndCannotBreakCleanup() throws Exception {
+        var release = new java.util.concurrent.CountDownLatch(1);
+        TtsEngine engine = new TtsEngine() {
+            @Override public ProcessBuilder buildProcess(String text, int rate) {
+                try { release.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
+                return new ProcessBuilder("/nonexistent/luminaread-test-tts");
+            }
+            @Override public boolean isAvailable() { return true; }
+        };
+        var service = new TtsService(engine);
+        var monitorHeld = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var calls = new AtomicInteger();
+        try {
+            service.speakText("text", 175, 1, () -> {
+                monitorHeld.set(Thread.holdsLock(service));
+                calls.incrementAndGet();
+                throw new IllegalStateException("Broken UI listener");
+            });
+            assertDoesNotThrow(service::stop);
+            assertFalse(monitorHeld.get(), "Callbacks may wait for the UI, which also calls this service");
+            assertFalse(service.isSpeaking());
+            service.stop();
+            assertEquals(1, calls.get());
+        } finally { release.countDown(); service.stop(); }
+    }
+
     @Test
     void unixSpeechTreatsOptionLikeBookTextAsData() {
         String text = "--phonout=chapter.txt";

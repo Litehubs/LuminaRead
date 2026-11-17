@@ -1,5 +1,7 @@
 package com.luminaread.config;
 
+import com.luminaread.util.BoundedInput;
+
 import com.luminaread.util.Json;
 import com.luminaread.util.AtomicFile;
 
@@ -50,15 +52,15 @@ public class SettingsJsonRepository {
 
             if (display != null) {
                 sb.append("  \"display\": {\n");
-                sb.append("    \"themeId\": ").append(quote(display.getThemeId())).append(",\n");
-                sb.append("    \"fontFamily\": ").append(quote(display.getFontFamily())).append(",\n");
+                sb.append("    \"themeId\": ").append(Json.quote(display.getThemeId())).append(",\n");
+                sb.append("    \"fontFamily\": ").append(Json.quote(display.getFontFamily())).append(",\n");
                 sb.append("    \"fontSize\": ").append(display.getFontSize()).append(",\n");
                 sb.append("    \"lineHeight\": ").append(display.getLineHeight()).append(",\n");
                 sb.append("    \"paragraphSpacingPx\": ").append(display.getParagraphSpacingPx()).append(",\n");
                 sb.append("    \"horizontalMarginPx\": ").append(display.getHorizontalMarginPx()).append(",\n");
                 sb.append("    \"verticalMarginPx\": ").append(display.getVerticalMarginPx()).append(",\n");
-                sb.append("    \"textAlignment\": ").append(quote(display.getTextAlignment().name())).append(",\n");
-                sb.append("    \"readingMode\": ").append(quote(display.getReadingMode().name())).append(",\n");
+                sb.append("    \"textAlignment\": ").append(Json.quote(display.getTextAlignment().name())).append(",\n");
+                sb.append("    \"readingMode\": ").append(Json.quote(display.getReadingMode().name())).append(",\n");
                 sb.append("    \"twoColumnSpread\": ").append(display.isTwoColumnSpread()).append(",\n");
                 sb.append("    \"charsPerPage\": ").append(display.getCharsPerPage()).append(",\n");
                 sb.append("    \"dimmerOpacity\": ").append(display.getDimmerOpacity()).append(",\n");
@@ -77,7 +79,7 @@ public class SettingsJsonRepository {
                 sb.append("    \"catalogs\": [\n");
                 List<String> list = opds.getCustomOpdsCatalogs();
                 for (int i = 0; i < list.size(); i++) {
-                    sb.append("      ").append(quote(list.get(i)));
+                    sb.append("      ").append(Json.quote(list.get(i)));
                     if (i < list.size() - 1) sb.append(",");
                     sb.append("\n");
                 }
@@ -102,7 +104,7 @@ public class SettingsJsonRepository {
     public synchronized boolean load(ReaderDisplayConfig display, OpdsCatalogConfig opds, Path sourcePath) {
         if (!Files.exists(sourcePath)) return false;
         try {
-            String text = Files.readString(sourcePath, StandardCharsets.UTF_8);
+            String text = new String(BoundedInput.read(sourcePath, 1024 * 1024), StandardCharsets.UTF_8);
             Object parsed = Json.parse(text);
             if (!(parsed instanceof Map<?, ?> root)) throw new IllegalArgumentException("Ожидался объект настроек");
             verifySection(root, "display");
@@ -195,18 +197,5 @@ public class SettingsJsonRepository {
         }
     }
 
-    private static String quote(String s) {
-        if (s == null) return "\"\"";
-        StringBuilder sb = new StringBuilder("\"");
-        for (char c : s.toCharArray()) {
-            if (c == '"') sb.append("\\\"");
-            else if (c == '\\') sb.append("\\\\");
-            else if (c == '\n') sb.append("\\n");
-            else if (c == '\r') sb.append("\\r");
-            else if (c == '\t') sb.append("\\t");
-            else sb.append(c);
-        }
-        sb.append("\"");
-        return sb.toString();
-    }
+
 }

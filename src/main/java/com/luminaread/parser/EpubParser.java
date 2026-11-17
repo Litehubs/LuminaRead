@@ -22,7 +22,6 @@ import java.io.StringReader;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -104,7 +103,6 @@ public class EpubParser implements BookParser {
         content.setTitle(stripExt(file.getName()));
         content.setAuthor("Неизвестный автор");
 
-        Path imgCacheDir = getImageCacheDir(file.getName());
         Map<String, String> imageUriByEntryPath = new HashMap<>();
         for (Map.Entry<String, byte[]> e : zipEntries.entrySet()) {
             String path = e.getKey();
@@ -117,29 +115,20 @@ public class EpubParser implements BookParser {
                         content.setCoverImage(e.getValue());
                     }
                 }
-                if (imgCacheDir != null && !lower.endsWith(".svg")) {
-                    try {
-                        String flatName = path.replace('/', '_').replace('\\', '_');
-                        if (lower.endsWith(".webp")) {
-                            flatName = flatName.replaceAll("(?i)\\.webp$", ".png");
-                            var bi = com.luminaread.service.MediaCacheService.getInstance().decodeBytes(e.getValue());
-                            Path target = imgCacheDir.resolve(flatName);
-                            if (bi != null) {
-                                javax.imageio.ImageIO.write(bi, "png", target.toFile());
-                                imageUriByEntryPath.put(path, target.toUri().toString());
-                            } else {
-                                Files.write(target, e.getValue());
-                                imageUriByEntryPath.put(path, target.toUri().toString());
+                if (!lower.endsWith(".svg")) {
+                    byte[] bytes = e.getValue();
+                    String extension = lower.substring(lower.lastIndexOf('.'));
+                    if (extension.equals(".webp")) {
+                        var image = com.luminaread.service.MediaCacheService.getInstance().decodeBytes(bytes);
+                        if (image != null) {
+                            var output = new ByteArrayOutputStream();
+                            if (javax.imageio.ImageIO.write(image, "png", output)) {
+                                bytes = output.toByteArray();
+                                extension = ".png";
                             }
-                        } else {
-                            Path target = imgCacheDir.resolve(flatName);
-                            Files.write(target, e.getValue());
-                            imageUriByEntryPath.put(path, target.toUri().toString());
                         }
-                    } catch (Exception ex) {
-                        java.util.logging.Logger.getLogger(EpubParser.class.getName())
-                                .log(java.util.logging.Level.WARNING, "Не удалось сохранить изображение EPUB", ex);
                     }
+                    imageUriByEntryPath.put(path, BookImages.save(bytes, extension).toUri().toString());
                 }
             }
         }
@@ -534,22 +523,9 @@ public class EpubParser implements BookParser {
     private String decodeUrlPath(String raw) {
         if (raw == null) return "";
         try {
-            return java.net.URLDecoder.decode(raw, StandardCharsets.UTF_8);
+            return java.net.URLDecoder.decode(raw.replace("+", "%2B"), StandardCharsets.UTF_8);
         } catch (Exception e) {
             return raw;
-        }
-    }
-
-    private Path getImageCacheDir(String fileName) {
-        try {
-            String safeBook = fileName.replaceAll("[^a-zA-Z0-9._\\-]", "_");
-            Path dir = Path.of(System.getProperty("user.home"), ".luminaread", "cache", "epub_" + safeBook);
-            Files.createDirectories(dir);
-            return dir;
-        } catch (Exception e) {
-            java.util.logging.Logger.getLogger(EpubParser.class.getName())
-                    .log(java.util.logging.Level.WARNING, "Не удалось создать кэш изображений EPUB", e);
-            return null;
         }
     }
 

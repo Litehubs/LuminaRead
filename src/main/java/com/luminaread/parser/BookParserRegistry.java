@@ -117,6 +117,12 @@ public class BookParserRegistry {
      * @return matching BookParser if found
      */
     public Optional<BookParser> findParser(File file, String formatHint) {
+        // A detected signature is more reliable than a filename supplied by a server.
+        if (formatHint != null) {
+            for (BookParser parser : parsers) {
+                if (parser.supports(null, formatHint)) return Optional.of(parser);
+            }
+        }
         for (BookParser parser : parsers) {
             if (parser.supports(file, formatHint)) {
                 return Optional.of(parser);

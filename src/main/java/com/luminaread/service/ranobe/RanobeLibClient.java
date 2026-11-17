@@ -1,5 +1,7 @@
 package com.luminaread.service.ranobe;
 
+import com.luminaread.util.HttpText;
+
 import com.luminaread.model.ranobe.RanobeChapter;
 import com.luminaread.model.ranobe.RanobeChapterContent;
 import com.luminaread.model.ranobe.RanobeItem;
@@ -8,9 +10,6 @@ import com.luminaread.service.MediaCacheService;
 import com.luminaread.util.HtmlSanitizer;
 import com.luminaread.util.Json;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
@@ -325,17 +324,7 @@ public class RanobeLibClient {
         conn.setConnectTimeout(connectTimeoutMs);
         conn.setReadTimeout(readTimeoutMs);
 
-        int code = conn.getResponseCode();
-        InputStream is = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
-        if (is == null) throw new Exception("HTTP error " + code);
-
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) sb.append(line);
-            if (code >= 400) throw new Exception("HTTP " + code + ": " + sb);
-            return sb.toString();
-        }
+        return HttpText.read(conn);
     }
 
     public static IMediaCacheService.CachedImageInfo cacheIllustration(String urlStr) {

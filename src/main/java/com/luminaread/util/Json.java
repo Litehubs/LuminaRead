@@ -32,6 +32,13 @@ public final class Json {
         return result.append('}').toString();
     }
 
+    /** Quotes persisted text, including control characters and UTF-16 surrogate pairs. */
+    public static String quote(String value) {
+        StringBuilder result = new StringBuilder();
+        appendQuoted(result, value == null ? "" : value);
+        return result.toString();
+    }
+
     private static void appendQuoted(StringBuilder output, String value) {
         output.append('"');
         for (int i = 0; i < value.length(); i++) {

@@ -10,6 +10,14 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class DownloadLimitTest {
+    @Test void unexpectedHtmlIsRejectedEvenWithoutKnownErrorKeywords(@TempDir Path dir) throws Exception {
+        String html = "<!doctype html><html><body>Service temporarily unavailable. Please try again later.</body></html>";
+        var downloader = new BookDownloader(new DownloadSafetyTest.FakeClient(html), null);
+        assertThrows(IllegalStateException.class,
+                () -> downloader.downloadBookFile("http://example.com/book.epub", "book", "EPUB", dir, null));
+        try (var entries = Files.list(dir)) { assertEquals(0, entries.count()); }
+        assertNotNull(downloader.downloadBookFile("http://example.com/book.html", "book", "HTML", dir, null));
+    }
     @Test void oversizedResponseDoesNotReplaceExistingBook(@TempDir Path dir) throws Exception {
         Path existing = dir.resolve("book.txt");
         Files.writeString(existing, "existing");

@@ -1,5 +1,7 @@
 package com.luminaread.service.ranobe;
 
+import com.luminaread.util.BoundedInput;
+
 import com.luminaread.model.ranobe.RanobeItem;
 import com.luminaread.util.Json;
 import com.luminaread.util.AtomicFile;
@@ -88,7 +90,7 @@ public class RanobeStateRepository {
                 for (Map.Entry<String, String> e : lastReadChapterMap.entrySet()) {
                     if (e.getKey() == null) continue;
                     if (i++ > 0) sb.append(",\n");
-                    sb.append("    ").append(quote(e.getKey())).append(": ").append(quote(e.getValue()));
+                    sb.append("    ").append(Json.quote(e.getKey())).append(": ").append(Json.quote(e.getValue()));
                 }
             }
             sb.append("\n  }");
@@ -99,7 +101,7 @@ public class RanobeStateRepository {
                 for (Map.Entry<String, String> e : readerPrefs.entrySet()) {
                     if (e.getKey() == null) continue;
                     if (i++ > 0) sb.append(",\n");
-                    sb.append("    ").append(quote(e.getKey())).append(": ").append(quote(e.getValue()));
+                    sb.append("    ").append(Json.quote(e.getKey())).append(": ").append(Json.quote(e.getValue()));
                 }
                 sb.append("\n  }\n");
             } else {
@@ -129,7 +131,7 @@ public class RanobeStateRepository {
         try {
             Path stateFile = getStateFilePath();
             if (!Files.exists(stateFile)) return;
-            String text = Files.readString(stateFile, StandardCharsets.UTF_8);
+            String text = new String(BoundedInput.read(stateFile, 32 * 1024 * 1024), StandardCharsets.UTF_8);
             Object root = Json.parse(text);
             if (!(root instanceof Map)) throw new IllegalArgumentException("Ожидался объект JSON");
             Map<?, ?> map = (Map<?, ?>) root;
@@ -176,14 +178,14 @@ public class RanobeStateRepository {
     }
 
     private static String itemToJson(RanobeItem item) {
-        return "{\"id\":" + quote(item.id) +
-                ",\"title\":" + quote(item.title) +
-                ",\"rusTitle\":" + quote(item.rusTitle) +
-                ",\"description\":" + quote(item.description) +
-                ",\"coverUrl\":" + quote(item.coverUrl) +
-                ",\"status\":" + quote(item.status) +
-                ",\"rating\":" + quote(item.rating) +
-                ",\"releaseDate\":" + quote(item.releaseDate) + "}";
+        return "{\"id\":" + Json.quote(item.id) +
+                ",\"title\":" + Json.quote(item.title) +
+                ",\"rusTitle\":" + Json.quote(item.rusTitle) +
+                ",\"description\":" + Json.quote(item.description) +
+                ",\"coverUrl\":" + Json.quote(item.coverUrl) +
+                ",\"status\":" + Json.quote(item.status) +
+                ",\"rating\":" + Json.quote(item.rating) +
+                ",\"releaseDate\":" + Json.quote(item.releaseDate) + "}";
     }
 
     private static <T extends RanobeItem> T itemFromJson(Object obj, ItemFactory<T> factory) {
@@ -203,20 +205,7 @@ public class RanobeStateRepository {
         );
     }
 
-    private static String quote(String s) {
-        if (s == null) return "\"\"";
-        StringBuilder sb = new StringBuilder("\"");
-        for (char c : s.toCharArray()) {
-            if (c == '"') sb.append("\\\"");
-            else if (c == '\\') sb.append("\\\\");
-            else if (c == '\n') sb.append("\\n");
-            else if (c == '\r') sb.append("\\r");
-            else if (c == '\t') sb.append("\\t");
-            else sb.append(c);
-        }
-        sb.append("\"");
-        return sb.toString();
-    }
+
 
     private static String str(Object o) {
         return o == null ? "" : o.toString();

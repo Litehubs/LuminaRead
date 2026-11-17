@@ -1,6 +1,7 @@
 package com.luminaread.service.catalog;
 
 import com.luminaread.model.DownloadTask;
+import com.luminaread.util.TimedInput;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -46,6 +47,7 @@ public class BookDownloader implements IBookDownloader {
     private final Runnable updateListener;
     private final long maxDownloadBytes;
     private final long maxExpandedBytes;
+    private final Duration transferTimeout;
 
     public BookDownloader() {
         this(null, null);
@@ -60,7 +62,13 @@ public class BookDownloader implements IBookDownloader {
     }
 
     public BookDownloader(HttpClient httpClient, Runnable updateListener, long maxDownloadBytes, long maxExpandedBytes) {
+        this(httpClient, updateListener, maxDownloadBytes, maxExpandedBytes, Duration.ofMinutes(3));
+    }
+
+    public BookDownloader(HttpClient httpClient, Runnable updateListener, long maxDownloadBytes,
+                          long maxExpandedBytes, Duration transferTimeout) {
         if (maxDownloadBytes <= 0 || maxExpandedBytes <= 0) throw new IllegalArgumentException("Размеры должны быть положительными");
+        if (transferTimeout == null || transferTimeout.toMillis() <= 0) throw new IllegalArgumentException("Timeout must be positive");
         this.httpClient = (httpClient != null) ? httpClient : HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.ALWAYS)
                 .connectTimeout(Duration.ofSeconds(15))
@@ -68,6 +76,7 @@ public class BookDownloader implements IBookDownloader {
         this.updateListener = updateListener;
         this.maxDownloadBytes = maxDownloadBytes;
         this.maxExpandedBytes = maxExpandedBytes;
+        this.transferTimeout = transferTimeout;
     }
 
     @Override
@@ -98,7 +107,7 @@ public class BookDownloader implements IBookDownloader {
                     .build();
 
             HttpResponse<InputStream> response = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
-            try (InputStream in = response.body()) {
+            try (InputStream in = new TimedInput(response.body(), transferTimeout)) {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IllegalStateException("Сервер вернул код ответа HTTP " + response.statusCode()
                         + " (возможно, книга защищена авторским правом или недоступна для свободного скачивания).");
@@ -263,6 +272,7 @@ public class BookDownloader implements IBookDownloader {
                             || headText.contains("404") || headText.contains("cloudflare")) {
                         throw new IllegalStateException("Это издание защищено от прямого скачивания на сайте источника (требуется вход/аренда). Выберите другое издание в списке или формат PDF/TXT.");
                     }
+                    throw new IllegalStateException("Вместо книги сервер вернул веб-страницу. Выберите другой источник или формат.");
                 }
             }
         }
@@ -325,7 +335,7 @@ public class BookDownloader implements IBookDownloader {
 
             HttpResponse<InputStream> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
             String metadata;
-            try (InputStream input = resp.body()) {
+            try (InputStream input = new TimedInput(resp.body(), Duration.ofSeconds(10))) {
                 if (resp.statusCode() != 200) return originalUrl;
                 byte[] bytes = input.readNBytes(2 * 1024 * 1024 + 1);
                 if (bytes.length > 2 * 1024 * 1024) return originalUrl;

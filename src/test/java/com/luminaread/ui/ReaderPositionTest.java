@@ -58,11 +58,24 @@ class ReaderPositionTest {
             try {
                 SwingUtilities.invokeAndWait(() -> {
                     readers[0] = createReader(storage);
+                    try {
+                        var field = ReaderPanel.class.getDeclaredField("statusLeftLabel");
+                        field.setAccessible(true);
+                        var label = (javax.swing.JLabel) field.get(readers[0]);
+                        label.setText("<html><b>Untrusted title</b></html>");
+                        require(label.getClientProperty("html") == null, "Book titles must not enable Swing HTML");
+                    } catch (ReflectiveOperationException ex) { throw new AssertionError(ex); }
                     readers[0].openBook(book);
                 });
                 awaitLayout(readers[0], contentField, scrollField, 0);
 
                 SwingUtilities.invokeAndWait(() -> {
+                    require(!book.isFinished(), "Opening a scrolling chapter must not finish the book");
+                    var bar = scroll(readers[0], scrollField).getVerticalScrollBar();
+                    bar.setValue((bar.getMaximum() - bar.getVisibleAmount()) / 2);
+                    readers[0].stopActiveFeatures();
+                    require(book.getProgressPercent() > 45 && book.getProgressPercent() < 55,
+                            "Scroll progress must follow the position within the chapter");
                     scroll(readers[0], scrollField).getVerticalScrollBar().setValue(140);
                     storage.addBookmark(new Bookmark(book.getId(), book.getTitle(),
                             0, "Глава", 0, 140, "Моя закладка", ""));
