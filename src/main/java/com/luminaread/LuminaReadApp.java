@@ -15,6 +15,7 @@ import javax.swing.JOptionPane;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 
 public class LuminaReadApp {
@@ -100,7 +101,7 @@ public class LuminaReadApp {
         }
         try {
             Path booksDir = storageService.getBooksDir();
-            Path sampleFb2 = booksDir.resolve("Белые_ночи_Достоевский_Демо.fb2");
+            Path sampleFb2 = samplePath(booksDir, "Белые_ночи_Достоевский_Демо.fb2", "White_Nights_Demo.fb2");
             if (!Files.exists(sampleFb2)) {
                 String fb2Xml = """
                         <?xml version="1.0" encoding="UTF-8"?>
@@ -145,7 +146,7 @@ public class LuminaReadApp {
                 storageService.importBookFile(sampleFb2.toFile(), false);
             }
 
-            Path sampleGuide = booksDir.resolve("Руководство_LuminaRead_Pro.md");
+            Path sampleGuide = samplePath(booksDir, "Руководство_LuminaRead_Pro.md", "LuminaRead_Guide.md");
             if (!Files.exists(sampleGuide)) {
                 String mdText = """
                         Название: Руководство по LuminaRead
@@ -189,6 +190,14 @@ public class LuminaReadApp {
         } catch (Exception ex) {
             java.util.logging.Logger.getLogger(LuminaReadApp.class.getName())
                     .log(java.util.logging.Level.WARNING, "Не удалось добавить демонстрационные книги", ex);
+        }
+    }
+
+    private static Path samplePath(Path directory, String name, String fallback) {
+        try {
+            return directory.resolve(name);
+        } catch (InvalidPathException ex) {
+            return directory.resolve(fallback);
         }
     }
 }

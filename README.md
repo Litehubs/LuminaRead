@@ -4,40 +4,29 @@
 
 ## Установка и запуск
 
-Для запуска готовой сборки нужна **Java 17 или новее** с поддержкой настольных приложений. Подойдёт Eclipse Temurin для вашей ОС и архитектуры. [Установка Java](https://adoptium.net/installation)
+Готовые установщики для Windows и Linux будут доступны на странице релиза.
+Выберите файл из списка **Assets**. Java входит в оба пакета. [Скачать LuminaRead](https://github.com/Litehubs/LuminaRead/releases/latest)
 
-1. Войдите в GitHub и откройте последний успешный запуск для ветки `main`. Внизу страницы скачайте артефакт **LuminaRead**. GitHub хранит сборки этого проекта 14 дней. [Сборки LuminaRead](https://github.com/Litehubs/LuminaRead/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess) · [Как скачать артефакт](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
-2. Распакуйте архив в отдельную папку. Внутри находится `LuminaRead-2.0.0.jar`.
-3. Откройте терминал в папке с JAR и выполните команды для вашей системы.
+| Система | Файл | Установка |
+| --- | --- | --- |
+| Windows x64 | `LuminaRead-…-windows-x64.exe` | Откройте установщик, затем запустите **LuminaRead** из меню «Пуск». |
+| Ubuntu / Debian amd64 | `LuminaRead-…-linux-amd64.deb` | Откройте пакет через установщик приложений или выполните `sudo apt install ./имя-файла.deb`, подставив скачанное имя. Затем откройте **LuminaRead** из меню приложений. |
 
-### Windows
+Пакет Linux проверяется на Ubuntu 22.04 и Debian 12. На Windows неподписанный установщик может вызвать предупреждение SmartScreen. Скачивайте установщик со страницы проекта и сверяйте его SHA-256 с файлом `SHA256SUMS` из того же релиза. [О SmartScreen](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)
 
-При установке Eclipse Temurin оставьте включённым добавление Java в `PATH`. После установки откройте новое окно PowerShell. Первая команда должна показать Java 17 или новее. [Установка Temurin в Windows](https://adoptium.net/installation/windows/)
+### Запуск JAR на macOS или другой системе
 
-```powershell
+Установите Java 17 или новее и скачайте `LuminaRead.jar` из раздела **Assets** на странице релиза. Откройте терминал в папке со скачанным файлом и запустите приложение. [Установка Java](https://adoptium.net/installation) · [Скачать LuminaRead](https://github.com/Litehubs/LuminaRead/releases/latest)
+
+```text
 java -version
-java -jar .\LuminaRead-2.0.0.jar
+java -jar LuminaRead.jar
 ```
-
-Если версия ниже 17, команда `Get-Command java` покажет, какую установку использует PowerShell. Проверьте порядок записей Java в `PATH`.
-
-### Linux
-
-Откройте терминал из графического сеанса. Установите настольную сборку OpenJDK или Temurin 17 или новее. Для запуска окна потребуется полноценный пакет Java с графическими библиотеками.
-
-```bash
-java -version
-java -jar ./LuminaRead-2.0.0.jar
-```
-
-### macOS
-
-Откройте Терминал в папке с JAR и выполните `java -jar ./LuminaRead-2.0.0.jar`.
 
 ### PDF и озвучка
 
-- На **Windows и Linux** для извлечения текста из PDF нужна команда `pdftotext` из Poppler в `PATH`. В Ubuntu и Debian установите пакет `poppler-utils` командой `sudo apt install poppler-utils`. Проверьте доступность команды через `pdftotext -v`. В этих системах LuminaRead читает текстовый слой PDF. Для сканов без него нужно предварительно распознать текст. [Пакет Poppler для Debian](https://packages.debian.org/stable/utils/poppler-utils)
-- Для **озвучки** на Windows используется Windows PowerShell (`powershell.exe`) с `System.Speech`. На Linux нужна команда `espeak` или `spd-say`. PDF и озвучка имеют отдельные зависимости, которые можно установить по мере необходимости.
+- Текстовый слой PDF читается встроенным движком. Для сканов без текстового слоя на Windows и Linux нужно предварительно распознать текст. На macOS приложение также отображает изображения страниц через PDFKit.
+- Для озвучки на Windows используется Windows PowerShell (`powershell.exe`) с `System.Speech`. На Linux нужна команда `espeak` или `spd-say`.
 
 ## Сборка из исходников
 
@@ -46,12 +35,12 @@ java -jar ./LuminaRead-2.0.0.jar
 ```text
 mvn -v
 mvn clean verify
-java -jar target/LuminaRead-2.0.0.jar
+java -jar target/LuminaRead.jar
 ```
 
 Проверьте, что `mvn -v` показывает Java 17 или новее. Maven запускает тесты и включает библиотеки приложения в JAR. Для первой сборки требуется доступ к Maven Central.
 
-В исходниках также есть скрипты запуска. На Windows можно открыть `Start_LuminaRead_Windows.bat`, на Linux выполнить `bash Start_LuminaRead_Linux.sh`, на macOS открыть `Start_LuminaRead_Mac.command`. Скрипты сначала ищут `target/LuminaRead-2.0.0.jar`. Для запуска скачанной сборки через скрипт поместите JAR рядом с ним под именем `LuminaRead.jar`.
+В исходниках также есть скрипты запуска. На Windows можно открыть `Start_LuminaRead_Windows.bat`, на Linux выполнить `bash Start_LuminaRead_Linux.sh`, на macOS открыть `Start_LuminaRead_Mac.command`. Скрипты сначала ищут `target/LuminaRead.jar`. Для запуска скачанной сборки через скрипт поместите JAR рядом с ним под именем `LuminaRead.jar`.
 
 В IntelliJ IDEA, Eclipse или VS Code откройте папку как Maven-проект и запустите `com.luminaread.LuminaReadApp`.
 
@@ -94,3 +83,5 @@ LuminaRead открывает вход в системном браузере и
 Декодер WebP TwelveMonkeys распространяется на условиях BSD-3-Clause. Исходные уведомления [TwelveMonkeys 3.15.0](https://github.com/haraldk/TwelveMonkeys/tree/twelvemonkeys-3.15.0) лежат в [licenses/twelvemonkeys](licenses/twelvemonkeys) и включены в JAR в `META-INF/licenses/twelvemonkeys/`.
 
 Сетевой клиент изображений использует Apache HttpComponents под Apache License 2.0 и SLF4J под лицензией MIT. Их лицензии и уведомления находятся в [licenses/apache-httpcomponents](licenses/apache-httpcomponents) и [licenses/slf4j](licenses/slf4j). Сборка включает их в каталоги `META-INF/licenses/` внутри JAR.
+
+Извлечение текста из PDF использует Apache PDFBox и Commons Logging. Их лицензии и уведомления включены в JAR. [Лицензии и уведомления](licenses/pdfbox)

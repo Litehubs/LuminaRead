@@ -28,10 +28,11 @@ public final class RegressionSmokeTest {
     public static void main(String[] args) throws Exception {
         testCharsets();
         testPlainTextParsing();
-        if (supportsPdfExtraction()) testPdfImportAndDuplicateNames();
-        else System.out.println("SKIP PDF smoke test: PDFKit or pdftotext is not available on this OS");
-        if (supportsPdfExtraction() && args.length > 0) testScannedPdf(Path.of(args[0]));
-        if (supportsPdfExtraction() && args.length > 1) testSelectablePdf(Path.of(args[1]));
+        testPdfImportAndDuplicateNames();
+        if (System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("mac")) {
+            if (args.length > 0) testScannedPdf(Path.of(args[0]));
+            if (args.length > 1) testSelectablePdf(Path.of(args[1]));
+        }
         System.out.println("PASS LuminaRead regression smoke tests");
     }
 
@@ -190,15 +191,7 @@ public final class RegressionSmokeTest {
         }
     }
 
-    private static boolean supportsPdfExtraction() {
-        if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac")) return true;
-        try {
-            Process process = new ProcessBuilder("pdftotext", "-v").redirectErrorStream(true).start();
-            return process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
+
 
     private static void writeMinimalPdf(Path destination, String text) throws Exception {
         String stream = "BT /F1 14 Tf 72 720 Td (" + text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")

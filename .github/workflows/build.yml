@@ -3,6 +3,7 @@ name: Build LuminaRead
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -32,7 +33,7 @@ jobs:
       - name: Launch the packaged JAR with a temporary library
         shell: pwsh
         run: |
-          $artifact = Get-Item target/LuminaRead-2.0.0.jar
+          $artifact = Get-Item target/LuminaRead.jar
           $archive = [IO.Compression.ZipFile]::OpenRead($artifact.FullName)
           try {
             $notices = @('LICENSE') + @(Get-ChildItem licenses -Recurse -File -Filter '*.txt' |
@@ -85,7 +86,7 @@ jobs:
           )
           try {
             $separator = [IO.Path]::PathSeparator
-            $classpath = "target/test-classes" + $separator + "target/LuminaRead-2.0.0.jar"
+            $classpath = "target/test-classes" + $separator + "target/LuminaRead.jar"
             $javaArgs = @("-Duser.home=$($profile.FullName)", "-Djava.awt.headless=false", "-Dsun.java2d.uiScale=1.5",
               "-Dhttps.proxyHost=127.0.0.1", "-Dhttps.proxyPort=1", "-Dhttp.proxyHost=127.0.0.1", "-Dhttp.proxyPort=1",
               "-cp", $classpath, "com.luminaread.ui.DesktopSmoke")
@@ -99,11 +100,101 @@ jobs:
             Remove-Item -LiteralPath $profile.FullName -Recurse -Force
           }
       - name: Upload the tested desktop JAR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.os == 'ubuntu-latest'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: LuminaRead
-          path: target/LuminaRead-2.0.0.jar
+          name: LuminaRead-jar
+          path: target/LuminaRead.jar
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  installers:
+    name: Installer / ${{ matrix.type }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            type: exe
+          - os: ubuntu-22.04
+            type: deb
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Prepare Debian packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot dpkg-dev
+      - name: Build JAR and smoke-test classes
+        run: mvn --batch-mode --no-transfer-progress -DskipTests clean package
+      - name: Build native installer
+        shell: pwsh
+        run: ./packaging/build.ps1 -Type '${{ matrix.type }}'
+      - name: Install and launch from an isolated profile
+        shell: pwsh
+        run: ./packaging/check-install.ps1
+      - name: Verify on Debian 12
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          packages=("$PWD"/target/packaging/installers/*.deb)
+          test "${#packages[@]}" -eq 1
+          docker run --rm -e LC_ALL=C -e DEBIAN_FRONTEND=noninteractive \
+            -v "${packages[0]}:/tmp/LuminaRead.deb:ro" debian:12-slim bash -euc '
+            apt-get update -qq
+            apt-get install -y --no-install-recommends /tmp/LuminaRead.deb
+            profile=$(mktemp -d)
+            launcher=$(dpkg -L luminaread | grep "/bin/LuminaRead$")
+            grep -Fx "Exec=$launcher" /usr/share/applications/luminaread.desktop
+            JAVA_TOOL_OPTIONS="-Djava.awt.headless=true -Duser.home=$profile" "$launcher"
+            test -f "$profile/LuminaRead_Books/White_Nights_Demo.fb2"
+            test -f "$profile/LuminaRead_Books/LuminaRead_Guide.md"
+            apt-get remove -y luminaread
+            test ! -e /usr/share/applications/luminaread.desktop
+          '
+      - name: Upload verified installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: LuminaRead-${{ matrix.type }}
+          path: target/packaging/installers/*.${{ matrix.type }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  release:
+    name: Stage GitHub release
+    if: github.ref_type == 'tag'
+    needs: [verify, installers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: LuminaRead-*
+          merge-multiple: true
+          path: release
+      - name: Attach packages and SHA-256 checksums to a draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd release
+          sha256sum -- ./*.exe ./*.deb LuminaRead.jar > SHA256SUMS
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "LuminaRead $RELEASE_TAG" \
+            --notes 'Windows x64: installer .exe. Ubuntu / Debian amd64: package .deb. Java is included in the installers. macOS and other systems: LuminaRead.jar with Java 17 or later.' \
+            ./*.exe ./*.deb LuminaRead.jar SHA256SUMS
