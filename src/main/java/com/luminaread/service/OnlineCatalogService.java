@@ -11,6 +11,7 @@ import com.luminaread.service.catalog.OpdsFeedParser;
 
 import javax.swing.SwingUtilities;
 import java.io.File;
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -52,7 +53,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
     private final HttpClient httpClient;
     private final OpdsFeedParser opdsFeedParser;
     private final IBookDownloader bookDownloader;
-    private final List<DownloadTask> downloadTasks = new CopyOnWriteArrayList<>();
+    private final LibraryDownloads downloads;
     private final List<Runnable> downloadListeners = new CopyOnWriteArrayList<>();
     private final AtomicBoolean downloadNotificationPending = new AtomicBoolean();
 
@@ -67,6 +68,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
                 .build();
         this.opdsFeedParser = (opdsFeedParser != null) ? opdsFeedParser : new OpdsFeedParser();
         this.bookDownloader = (bookDownloader != null) ? bookDownloader : new BookDownloader(this.httpClient, this::notifyDownloadListeners);
+        this.downloads = new LibraryDownloads(this.bookDownloader, this::notifyDownloadListeners);
     }
 
     public OpdsFeedParser getOpdsFeedParser() {
@@ -83,13 +85,20 @@ public class OnlineCatalogService implements IOnlineCatalogService {
 
     @Override
     public List<DownloadTask> getDownloadTasks() {
-        return new ArrayList<>(downloadTasks);
+        return downloads.tasks();
     }
 
     @Override
     public void clearCompletedTasks() {
-        downloadTasks.removeIf(DownloadTask::isFinished);
-        notifyDownloadListeners();
+        downloads.clear();
+    }
+
+    public void clearLibraryDownloads(LibraryStorageService library) throws IOException {
+        downloads.clear(library);
+    }
+
+    public void recoverDownloads(LibraryStorageService library) throws IOException {
+        downloads.recover(library);
     }
 
     @Override
@@ -120,17 +129,11 @@ public class OnlineCatalogService implements IOnlineCatalogService {
 
     @Override
     public DownloadTask createTrackedTask(String title, String formatHint, String url) {
-        return track(new DownloadTask(title, formatHint, url));
+        return downloads.track(new DownloadTask(title, formatHint, url));
     }
 
     public DownloadTask createLibraryDownload(String title, String formatHint, String url) {
-        return track(new DownloadTask(title, formatHint, url, true));
-    }
-
-    private DownloadTask track(DownloadTask task) {
-        downloadTasks.add(0, task);
-        notifyDownloadListeners();
-        return task;
+        return downloads.track(new DownloadTask(title, formatHint, url, true));
     }
 
     // ==========================================
@@ -248,32 +251,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
 
     public Book downloadAndImportBook(DownloadTask task, LibraryStorageService library,
                                       DoubleConsumer progressCallback) throws Exception {
-        File file;
-        try {
-            file = downloadBookFileWithTask(task, library.getBooksDir(), progressCallback);
-        } catch (Exception ex) {
-            reportDownloadFailure(task, "Не удалось скачать файл", ex);
-            throw ex;
-        }
-
-        try {
-            Book imported = library.importBookFile(file, false);
-            task.setImportedBook(imported);
-            task.setStatus(DownloadTask.Status.COMPLETED);
-            notifyDownloadListeners();
-            return imported;
-        } catch (Exception ex) {
-            String message = "Файл скачан, но добавить его в библиотеку не удалось: " + file.getName();
-            reportDownloadFailure(task, message, ex);
-            throw new IllegalStateException(message, ex);
-        }
-    }
-
-    private void reportDownloadFailure(DownloadTask task, String message, Exception error) {
-        LOG.log(Level.WARNING, message, error);
-        task.setErrorMessage(message);
-        task.setStatus(DownloadTask.Status.FAILED);
-        notifyDownloadListeners();
+        return downloads.run(task, library, progressCallback);
     }
 
     @Override

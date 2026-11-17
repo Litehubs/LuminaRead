@@ -112,6 +112,7 @@ public class MangaPanel extends JPanel {
     private int currentPageIndex = 0;
     private boolean isZenActive = false;
     private AutoScrollController autoScroll;
+    private boolean searchStarted;
 
     private ThemePalette currentTheme = ThemePalette.byId("NIGHT_AMOLED");
 
@@ -134,7 +135,11 @@ public class MangaPanel extends JPanel {
         yandexService.addListener(authListener);
         updateAuthButtonState();
 
-        if (initialSearch) performSearch("");
+        if (initialSearch) openCatalog();
+    }
+
+    void openCatalog() {
+        if (!searchStarted) performSearch("");
     }
 
     void useTransitionSurface(MotionSurface surface) {
@@ -674,6 +679,7 @@ public class MangaPanel extends JPanel {
 
     private void performSearch(String query) {
         if (disposed) return;
+        searchStarted = true;
         statusLabel.setText("⏳ Поиск манги и манхвы в онлайн-источниках...");
         gridContainer.removeAll();
         gridContainer.revalidate();

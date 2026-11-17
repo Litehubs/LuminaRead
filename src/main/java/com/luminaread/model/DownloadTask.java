@@ -35,10 +35,18 @@ public class DownloadTask {
     }
 
     public DownloadTask(String title, String format, String url, boolean importRequired) {
+        this(UUID.randomUUID().toString(), title, format, url, importRequired);
+    }
+
+    public static DownloadTask restore(UUID id, String title, String format) {
+        return new DownloadTask(id.toString(), title, format, "", true);
+    }
+
+    private DownloadTask(String id, String title, String format, String url, boolean importRequired) {
         this.importRequired = importRequired;
-        this.id = UUID.randomUUID().toString();
+        this.id = id;
         this.title = (title == null || title.isBlank()) ? "Книга из сети" : title.trim();
-        this.format = (format == null || format.isBlank()) ? "АВТО" : format.toUpperCase();
+        this.format = (format == null || format.isBlank()) ? "АВТО" : format.toUpperCase(java.util.Locale.ROOT);
         this.url = url != null ? url.trim() : "";
         this.status = Status.DOWNLOADING;
         this.progressPercent = 0;
