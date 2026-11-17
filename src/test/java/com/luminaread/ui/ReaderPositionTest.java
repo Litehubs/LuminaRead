@@ -84,6 +84,7 @@ class ReaderPositionTest {
                     readers[0].disposeResources();
                 });
 
+                storage.flushProgress();
                 var reopenedStorage = new LibraryStorageService();
                 Book reopened = reopenedStorage.getAllBooks().get(0);
                 require(reopened.getScrollOffset() == 420, "Closing lost the offset on disk");

@@ -43,8 +43,12 @@ class ReaderPanelLifecycleTest {
                         content.addChapter(new Chapter(0, "chapter", "<p>" + book.getTitle() + " text</p>", book.getTitle() + " text"));
                         return content;
                     }
+                    @Override public void saveProgress(Book book) {
+                        if (!SwingUtilities.isEventDispatchThread()) throw new AssertionError("Capture must run on the EDT");
+                    }
+                    @Override public boolean hasProgressError() { return true; }
                     @Override public synchronized void saveState() {
-                        throw new java.io.UncheckedIOException(new java.io.IOException("read-only disk"));
+                        throw new AssertionError("Reading progress rewrote the entire library");
                     }
                 };
                 ITtsService tts = new ITtsService() {

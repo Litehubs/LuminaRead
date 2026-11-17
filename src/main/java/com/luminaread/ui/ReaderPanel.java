@@ -83,6 +83,7 @@ public class ReaderPanel extends JPanel {
     private boolean disposed;
     private final Timer restoreScrollTimer;
     private final Timer saveScrollTimer;
+    private boolean closing;
     private int currentChapterIndex = 0;
     private int currentPageIndex = 0;
     private final LatestSwingRequest<ReaderTextSearch.Match> searchRequest = new LatestSwingRequest<>();
@@ -350,9 +351,9 @@ public class ReaderPanel extends JPanel {
         autoScrollTimer = new Timer(16, e -> performAutoScrollStep());
 
         readingTimeTrackerTimer = new Timer(5000, e -> {
-            if (currentBook != null && isShowing()) {
+            if (currentBook != null && currentContent != null && isShowing()) {
                 currentBook.addReadingSeconds(5);
-                updateStatusBar();
+                if (!saveScrollTimer.isRunning()) saveReadingProgress();
             }
         });
         readingTimeTrackerTimer.start();
@@ -614,7 +615,7 @@ public class ReaderPanel extends JPanel {
     }
 
     private void restoreScrollPosition(boolean layoutSettled) {
-        if (pendingScrollOffset == null) return;
+        if (closing || pendingScrollOffset == null) return;
         JScrollBar bar = editorScrollPane.getVerticalScrollBar();
         if (bar.getVisibleAmount() <= 0 || editorScrollPane.getViewport().getHeight() <= 0) return;
 
@@ -635,7 +636,7 @@ public class ReaderPanel extends JPanel {
     }
 
     private void recordScrollPosition() {
-        if (disposed || currentBook == null || currentContent == null) return;
+        if (disposed || closing || currentBook == null || currentContent == null) return;
         JScrollBar bar = editorScrollPane.getVerticalScrollBar();
         if (bar.getVisibleAmount() <= 0 || editorScrollPane.getViewport().getHeight() <= 0) return;
         int offset = bar.getValue();
@@ -710,32 +711,14 @@ public class ReaderPanel extends JPanel {
 
     private void saveReadingProgress() {
         saveScrollTimer.stop();
-        if (currentBook == null || currentContent == null || currentContent.getChapters().isEmpty()) return;
-        int totalChapters = currentContent.getChapters().size();
-        double chapterWeight = 100.0 / totalChapters;
-        double withinChapterRatio = currentChapterPages.size() <= 1
-                ? 1.0
-                : (double) (currentPageIndex + 1) / currentChapterPages.size();
+        if (closing || currentBook == null || currentContent == null || currentContent.getChapters().isEmpty()) return;
         boolean scrolling = storageService.getSettings().getReadingMode() == ReaderSettings.ReadingMode.SCROLL;
-        if (scrolling) {
-            JScrollBar bar = editorScrollPane.getVerticalScrollBar();
-            int range = bar.getMaximum() - bar.getMinimum() - bar.getVisibleAmount();
-            withinChapterRatio = range > 0 ? (double) (bar.getValue() - bar.getMinimum()) / range : 1.0;
-        }
-        double progress = (currentChapterIndex * chapterWeight) + (withinChapterRatio * chapterWeight);
-
-        currentBook.setCurrentChapterIndex(currentChapterIndex);
-        currentBook.setCurrentPageInChapter(currentPageIndex);
-        // During layout the scrollbar still belongs to the previous page.
-        if (!scrolling || pendingScrollOffset == null) currentBook.setProgressPercent(progress);
+        JScrollBar bar = editorScrollPane.getVerticalScrollBar();
+        int range = bar.getMaximum() - bar.getMinimum() - bar.getVisibleAmount();
+        ReaderProgress.update(currentBook, currentChapterIndex, currentContent.getChapters().size(), currentPageIndex,
+                currentChapterPages.size(), scrolling, pendingScrollOffset == null, bar.getValue() - bar.getMinimum(), range);
+        storageService.saveProgress(currentBook);
         updateStatusBar();
-        try {
-            storageService.saveState();
-        } catch (java.io.UncheckedIOException | SecurityException ex) {
-            java.util.logging.Logger.getLogger(ReaderPanel.class.getName())
-                    .log(java.util.logging.Level.WARNING, "Не удалось сохранить прогресс чтения", ex);
-            statusRightLabel.setText("Прогресс не сохранён");
-        }
     }
 
     private void updateStatusBar() {
@@ -760,6 +743,10 @@ public class ReaderPanel extends JPanel {
                 ch.getTitle(),
                 pageInfo));
 
+        if (storageService.hasProgressError()) {
+            statusRightLabel.setText("Прогресс не сохранён");
+            return;
+        }
         statusRightLabel.setText(String.format("Прогресс: %.1f%%  •  Осталось ~%d мин  •  %s",
                 currentBook.getProgressPercent(),
                 estMinutesLeft,
@@ -1059,7 +1046,7 @@ public class ReaderPanel extends JPanel {
 
     public void stopActiveFeatures() {
         pageSurface.cancelTransition();
-        if (saveScrollTimer.isRunning()) saveReadingProgress();
+        saveReadingProgress();
         bookLoader.cancel();
         dictionaryLookup.cancel();
         clearSearch();
@@ -1071,9 +1058,22 @@ public class ReaderPanel extends JPanel {
         }
     }
 
+    void pauseForClose() {
+        stopActiveFeatures();
+        closing = true;
+        readingTimeTrackerTimer.stop();
+        restoreScrollTimer.stop();
+    }
+
+    void resumeAfterCloseFailure() {
+        closing = false;
+        readingTimeTrackerTimer.start();
+        if (pendingScrollOffset != null) restoreScrollTimer.start();
+    }
+
     public void disposeResources() {
         if (disposed) return;
-        stopActiveFeatures();
+        if (!closing) stopActiveFeatures();
         disposed = true;
         bookLoader.close();
         dictionaryLookup.close();

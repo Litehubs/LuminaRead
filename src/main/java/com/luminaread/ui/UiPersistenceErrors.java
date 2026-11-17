@@ -18,7 +18,7 @@ final class UiPersistenceErrors {
         }
     }
 
-    static void show(Component owner, String message, RuntimeException error) {
+    static void show(Component owner, String message, Throwable error) {
         Logger.getLogger(owner.getClass().getName()).log(Level.WARNING, message, error);
         if (owner.isShowing()) {
             JOptionPane.showMessageDialog(owner, message, "Ошибка сохранения", JOptionPane.ERROR_MESSAGE);

@@ -43,7 +43,7 @@ public class Fb2Parser implements BookParser {
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Set<String> ALLOWED_TAGS = Set.of(
             "p", "h3", "h4", "em", "strong", "b", "i", "s", "br",
-            "img", "div", "code", "sub", "sup", "blockquote");
+            "img", "div", "code", "sub", "sup", "blockquote", "a", "table", "tr", "th", "td");
 
     @Override
     public boolean supports(File file, String formatHint) {
@@ -266,6 +266,8 @@ public class Fb2Parser implements BookParser {
         s = s.replaceAll("(?i)<strikethrough[^>]*>", "<s>");
         s = s.replaceAll("(?i)</strikethrough>", "</s>");
         s = s.replaceAll("(?i)<empty-line\\s*/?>", "<p>&nbsp;</p>");
+        s = s.replaceAll("(?i)(<a\\s[^>]*?\\s?)(?:xlink:|l:)href(\\s*=\\s*[\"']#)",
+                "$1href$2");
         s = keepAllowedTags(s);
         s = s.replaceAll("[ \\t\\f\\r]+", " ");
         s = s.replaceAll(" *\\n *", "\n");

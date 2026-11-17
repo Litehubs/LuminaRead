@@ -64,7 +64,7 @@ class LibraryStorageSafetyTest {
         Files.delete(json);
         Files.createDirectory(json);
         storage.getSettings().getDisplayConfig().setFontSize(27);
-        assertThrows(UncheckedIOException.class, storage::saveState);
+        assertDoesNotThrow(storage::saveState);
         LibraryStorageService reloaded = new LibraryStorageService(home);
         assertEquals(27, reloaded.getSettings().getDisplayConfig().getFontSize());
     }
@@ -140,11 +140,18 @@ class LibraryStorageSafetyTest {
         Files.writeString(file, "A book with enough text to be imported into the library.");
         LibraryStorageService storage = new LibraryStorageService(home);
         Book book = storage.importBookFile(file.toFile(), false);
-        Path json = home.resolve(".luminaread/settings.json");
-        Files.delete(json);
-        Files.createDirectory(json);
+        var bookmark = new com.luminaread.model.Bookmark(book.getId(), "Book", 0, "Chapter", 0, 0, "Note", "");
+        storage.addBookmark(bookmark);
+        Path state = home.resolve(".luminaread/library_state.bin");
+        Path backup = Files.move(state, state.resolveSibling("backup"));
+        Files.createDirectory(state);
         assertThrows(UncheckedIOException.class, () -> storage.removeBook(book, true));
         assertTrue(Files.exists(file), "Original book must survive a failed save");
+        assertEquals(java.util.List.of(book), storage.getAllBooks());
+        assertEquals(java.util.List.of(bookmark), storage.getBookmarks(book.getId()));
+        Files.delete(state);
+        Files.move(backup, state);
+        assertEquals(book.getId(), new LibraryStorageService(home).getAllBooks().get(0).getId());
     }
 
     @Test void unknownBookCannotDeleteAFile() throws Exception {
