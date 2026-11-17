@@ -6,7 +6,7 @@ if ! command -v java >/dev/null 2>&1; then
     exit 1
 fi
 
-JAR_PATH="target/LuminaRead-2.0.0.jar"
+JAR_PATH="target/LuminaRead.jar"
 if [ ! -f "$JAR_PATH" ]; then JAR_PATH="LuminaRead.jar"; fi
 if [ ! -f "$JAR_PATH" ]; then
     echo "LuminaRead was not found. Build the project or place LuminaRead.jar next to this launcher."

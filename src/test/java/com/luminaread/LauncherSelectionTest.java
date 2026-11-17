@@ -23,13 +23,13 @@ class LauncherSelectionTest {
             Path script = Files.copy(Path.of(name), work.resolve(name));
             Files.writeString(work.resolve("LuminaRead.jar"), "bundled");
             Files.createDirectory(work.resolve("target"));
-            Files.writeString(work.resolve("target/LuminaRead-2.0.0.jar"), "built");
+            Files.writeString(work.resolve("target/LuminaRead.jar"), "built");
             run(script, fakeBin, capture);
-            assertTrue(Files.readString(capture).contains("target/LuminaRead-2.0.0.jar"));
-            Files.delete(work.resolve("target/LuminaRead-2.0.0.jar"));
+            assertTrue(Files.readString(capture).contains("target/LuminaRead.jar"));
+            Files.delete(work.resolve("target/LuminaRead.jar"));
             run(script, fakeBin, capture);
             assertTrue(Files.readString(capture).contains("LuminaRead.jar"));
-            assertFalse(Files.readString(capture).contains("target/LuminaRead-2.0.0.jar"));
+            assertFalse(Files.readString(capture).contains("target/LuminaRead.jar"));
             assertTrue(Files.readString(capture).contains("book with spaces.fb2"));
         }
     }

@@ -23,7 +23,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set "JAR_PATH=target\LuminaRead-2.0.0.jar"
+set "JAR_PATH=target\LuminaRead.jar"
 if not exist "%JAR_PATH%" set "JAR_PATH=LuminaRead.jar"
 if not exist "%JAR_PATH%" (
     echo.

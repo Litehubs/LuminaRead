@@ -17,9 +17,9 @@ import java.util.concurrent.TimeUnit;
 
 public class PdfParser implements BookParser {
     private static final long MAX_SOURCE_BYTES = 512L * 1024 * 1024;
-    private static final long MAX_EXTRACTED_TEXT_BYTES = 16L * 1024 * 1024;
+    static final long MAX_EXTRACTED_TEXT_BYTES = 16L * 1024 * 1024;
     private static final long MAX_THUMBNAIL_BYTES = 96L * 1024 * 1024;
-    private static final int MAX_PAGES = 5000;
+    static final int MAX_PAGES = 5000;
 
     @Override
     public boolean supports(File file, String formatHint) {
@@ -58,8 +58,8 @@ public class PdfParser implements BookParser {
         if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac")) {
             extracted = extractWithPdfKit(file, content);
         }
-        if (!extracted) {
-            String text = extractWithPdfToText(file);
+        if (!extracted && !Thread.currentThread().isInterrupted()) {
+            String text = extractWithPdfBox(file);
             if (text != null && !text.isBlank()) {
                 addTextPages(text.split("\\f", -1), content);
                 extracted = !content.getChapters().isEmpty();
@@ -282,35 +282,52 @@ public class PdfParser implements BookParser {
         }
     }
 
-    private String extractWithPdfToText(File file) {
+    private String extractWithPdfBox(File file) {
         Path tempOutput = null;
         Path tempError = null;
         Process process = null;
         try {
-            tempOutput = Files.createTempFile("luminaread-pdftotext-", ".txt");
-            tempError = Files.createTempFile("luminaread-pdftotext-error-", ".log");
-            ProcessBuilder pb = new ProcessBuilder("pdftotext", "-enc", "UTF-8", file.getAbsolutePath(), "-");
+            tempOutput = Files.createTempFile("luminaread-pdfbox-", ".txt");
+            tempError = Files.createTempFile("luminaread-pdfbox-error-", ".log");
+            boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
+            Path java = Path.of(System.getProperty("java.home"), "bin", windows ? "java.exe" : "java");
+            ProcessBuilder pb = new ProcessBuilder(java.toString(), "-Xmx256m", "-XX:+ExitOnOutOfMemoryError",
+                    "-Djava.awt.headless=true", "-Dpdfbox.fontcache.skipchecksums=true",
+                    "-Duser.home=" + System.getProperty("user.home"), "-cp", System.getProperty("java.class.path"),
+                    PdfTextWorker.class.getName(), file.getAbsolutePath());
             pb.redirectOutput(tempOutput.toFile());
             pb.redirectError(tempError.toFile());
             process = pb.start();
-            if (!waitForOutput(process, tempOutput, tempError, 30)) {
+            // The first extraction may have to index system fonts, particularly on Windows.
+            if (!waitForOutput(process, tempOutput, tempError, windows ? 75 : 30)) {
                 process.destroyForcibly();
                 process.waitFor(2, TimeUnit.SECONDS);
+                reportWorkerFailure("PDF worker exceeded its transfer or time limit", tempError);
                 return null;
             }
-            if (process.exitValue() != 0 || Files.size(tempOutput) > MAX_EXTRACTED_TEXT_BYTES) return null;
+            if (process.exitValue() != 0 || Files.size(tempOutput) > MAX_EXTRACTED_TEXT_BYTES) {
+                reportWorkerFailure("PDF worker exited with code " + process.exitValue(), tempError);
+                return null;
+            }
             return Files.readString(tempOutput, StandardCharsets.UTF_8);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             return null;
         } catch (Exception ex) {
             java.util.logging.Logger.getLogger(PdfParser.class.getName())
-                    .log(java.util.logging.Level.FINE, "pdftotext недоступен; пробуем другой способ чтения", ex);
+                    .log(java.util.logging.Level.FINE, "Не удалось извлечь текст PDF", ex);
             return null;
         } finally {
             if (process != null && process.isAlive()) process.destroyForcibly();
             deleteTemporaryFile(tempOutput);
             deleteTemporaryFile(tempError);
+        }
+    }
+
+    private static void reportWorkerFailure(String message, Path diagnostics) throws java.io.IOException {
+        if (!Boolean.getBoolean("luminaread.debugPdf")) return;
+        try (var input = Files.newInputStream(diagnostics)) {
+            System.err.println(message + ": " + new String(input.readNBytes(4096), StandardCharsets.UTF_8));
         }
     }
 

@@ -41,7 +41,7 @@ if [ -n "$JAVA_SPEC_VER" ] && [ "$JAVA_SPEC_VER" -lt 17 ] 2>/dev/null; then
 fi
 
 # 3. Check for LuminaRead.jar
-JAR_PATH="$SCRIPT_DIR/target/LuminaRead-2.0.0.jar"
+JAR_PATH="$SCRIPT_DIR/target/LuminaRead.jar"
 if [ ! -f "$JAR_PATH" ]; then JAR_PATH="$SCRIPT_DIR/LuminaRead.jar"; fi
 if [ ! -f "$JAR_PATH" ]; then
     echo "============================================================"
