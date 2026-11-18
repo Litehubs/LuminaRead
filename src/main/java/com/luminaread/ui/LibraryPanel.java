@@ -56,6 +56,13 @@ public class LibraryPanel extends JPanel {
     private final JPanel filterBar;
     private final JTextField searchField;
     private final JComboBox<String> sortCombo;
+    private static final int PAGE_SIZE = 12;
+    private final JPanel pageBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 4));
+    private final JButton previousPage = new JButton("Назад");
+    private final JButton nextPage = new JButton("Дальше");
+    private final JLabel pageLabel = new JLabel();
+    private List<Book> results = List.of();
+    private int page;
     private final JPanel cardsGridPanel;
     private final JScrollPane gridScrollPane;
     private ThemePalette currentTheme;
@@ -147,8 +154,14 @@ public class LibraryPanel extends JPanel {
         gridScrollPane.getVerticalScrollBar().setUnitIncrement(42);
         add(gridScrollPane, BorderLayout.CENTER);
 
+        previousPage.addActionListener(e -> turnPage(page - 1));
+        nextPage.addActionListener(e -> turnPage(page + 1));
+        pageBar.setOpaque(false);
+        pageBar.add(previousPage);
+        pageBar.add(pageLabel);
+        pageBar.add(nextPage);
+        add(pageBar, BorderLayout.SOUTH);
         applyTheme(currentTheme);
-        refreshBooksGrid();
     }
 
     private final java.util.Map<String, JButton> readButtons = new java.util.HashMap<>();
@@ -162,8 +175,17 @@ public class LibraryPanel extends JPanel {
     }
 
     void focusBook(String id) {
+        if (id != null && !readButtons.containsKey(id)) {
+            for (int i = 0; i < results.size(); i++) {
+                if (id.equals(results.get(i).getId())) {
+                    turnPage(i / PAGE_SIZE);
+                    break;
+                }
+            }
+        }
         JButton button = readButtons.get(id);
         if (button != null) {
+            gridScrollPane.validate();
             button.scrollRectToVisible(new java.awt.Rectangle(0, 0, button.getWidth(), button.getHeight()));
             button.requestFocusInWindow();
         } else {
@@ -172,7 +194,9 @@ public class LibraryPanel extends JPanel {
     }
 
     private void refreshResults() {
+        page = 0;
         refreshBooksGrid();
+        gridScrollPane.getVerticalScrollBar().setValue(0);
         if (animateResults && isShowing()) {
             arrivalStarted = System.nanoTime();
             updateArrival();
@@ -226,17 +250,40 @@ public class LibraryPanel extends JPanel {
                 : ModernUiFactory.createFlatButton(label, currentTheme);
         btn.addActionListener(e -> {
             activeShelfFilter = code;
+            int index = filterBar.getComponentZOrder(btn);
             rebuildFilterButtons();
+            filterBar.getComponent(index).requestFocusInWindow();
             refreshResults();
         });
         filterBar.add(btn);
     }
 
     public void refreshBooksGrid() {
+        results = storageService.getFilteredBooks(activeShelfFilter, searchField.getText(), activeSortMode);
+        page = Math.min(page, lastPage());
+        renderPage();
+    }
+
+    private int lastPage() {
+        return Math.max(0, results.size() - 1) / PAGE_SIZE;
+    }
+
+    private void turnPage(int target) {
+        page = Math.max(0, Math.min(target, lastPage()));
+        renderPage();
+        gridScrollPane.getVerticalScrollBar().setValue(0);
+    }
+
+    private void renderPage() {
         endArrival();
         readButtons.clear();
         cardsGridPanel.removeAll();
-        List<Book> books = storageService.getFilteredBooks(activeShelfFilter, searchField.getText(), activeSortMode);
+        int start = page * PAGE_SIZE;
+        List<Book> books = results.subList(start, Math.min(start + PAGE_SIZE, results.size()));
+        previousPage.setEnabled(page > 0);
+        nextPage.setEnabled(page < lastPage());
+        pageLabel.setText((page + 1) + " / " + (lastPage() + 1));
+        pageBar.setVisible(results.size() > PAGE_SIZE);
 
         if (books.isEmpty()) {
             cardsGridPanel.setLayout(new BorderLayout());
@@ -527,6 +574,7 @@ public class LibraryPanel extends JPanel {
         setBackground(theme.getBackground());
         topToolbar.setBackground(theme.getSurface());
         filterBar.setBackground(theme.getSurface());
+        pageLabel.setForeground(theme.getTextPrimary());
         cardsGridPanel.setBackground(theme.getBackground());
         gridScrollPane.getViewport().setBackground(theme.getBackground());
         ModernUiFactory.styleTextField(searchField, theme);
