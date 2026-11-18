@@ -265,6 +265,24 @@ class LibraryStorageSafetyTest {
         assertTrue(Files.exists(nonEmpty.resolve("keep.txt")));
     }
 
+    @Test void failedCatalogSaveRollsBackOnlyTheNewCopy() throws Exception {
+        var storage = new LibraryStorageService(home);
+        Path source = Files.writeString(home.resolve("draft.txt"), "First manuscript.");
+        var first = storage.importBookFile(source.toFile(), true);
+        Files.writeString(source, "A different manuscript.");
+        Path stateFile = home.resolve(".luminaread/library_state.bin");
+        Path backup = Files.move(stateFile, stateFile.resolveSibling("backup"));
+        Files.createDirectory(stateFile);
+        assertThrows(UncheckedIOException.class, () -> storage.importBookFile(source.toFile(), true));
+        assertEquals("First manuscript.", Files.readString(Path.of(first.getFilePath())));
+        try (var files = Files.list(storage.getBooksDir())) { assertEquals(1, files.count()); }
+        Files.delete(stateFile);
+        Files.move(backup, stateFile);
+        var next = storage.importBookFile(source.toFile(), true);
+        assertEquals("draft (2).txt", Path.of(next.getFilePath()).getFileName().toString());
+        assertEquals(2, new LibraryStorageService(home).getAllBooks().size());
+    }
+
     @Test void failedCopiedImportLeavesExistingBookAndSourceUntouched() throws Exception {
         LibraryStorageService storage = new LibraryStorageService(home);
         Path original = storage.getBooksDir().resolve("broken.failimport");

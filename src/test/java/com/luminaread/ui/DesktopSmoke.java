@@ -11,6 +11,7 @@ import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JEditorPane;
 import javax.swing.KeyStroke;
+import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import java.awt.Component;
@@ -63,6 +64,21 @@ public final class DesktopSmoke {
             require(storage.attempts == 1, "Cancellation started another file");
 
             Book book = storage.getAllBooks().get(0);
+            // Some CI desktops have no window manager. Exercise native focus when the OS grants it.
+            boolean[] checkFocus = {java.util.Arrays.asList(args).contains("--check-focus")};
+            onEdt(() -> {
+                var shelf = find(windows[0], LibraryPanel.class);
+                checkFocus[0] |= windows[0].isFocused();
+                if (checkFocus[0]) find(shelf, JTextField.class).requestFocusInWindow();
+            });
+            if (checkFocus[0]) {
+                await(() -> find(find(windows[0], LibraryPanel.class), JTextField.class).isFocusOwner(), "focus search");
+                onEdt(() -> {
+                    var search = find(find(windows[0], LibraryPanel.class), JTextField.class);
+                    search.setText(book.getTitle());
+                    require(search.isFocusOwner(), "Typing in the shelf lost keyboard focus");
+                });
+            }
             onEdt(() -> windows[0].openBookInReader(book));
             await(() -> {
                 var reader = find(windows[0], ReaderPanel.class);
@@ -81,6 +97,13 @@ public final class DesktopSmoke {
                 reader.getActionMap().get(key).actionPerformed(new ActionEvent(reader, 0, "desktop smoke"));
             });
             await(() -> book.getCurrentPageInChapter() == 1, "keyboard page turn");
+            onEdt(() -> button(find(windows[0], ReaderPanel.class), "< Полка").doClick());
+            await(() -> find(windows[0], LibraryPanel.class).isShowing(), "return to library");
+            if (checkFocus[0]) {
+                await(() -> windows[0].getFocusOwner() instanceof JButton focused
+                        && (focused.getText().equals("Читать") || focused.getText().equals("Продолжить чтение"))
+                        && SwingUtilities.isDescendingFrom(focused, find(windows[0], LibraryPanel.class)), "focus opened book");
+            }
             onEdt(() -> windows[0].dispatchEvent(new WindowEvent(windows[0], WindowEvent.WINDOW_CLOSING)));
             await(() -> !windows[0].isDisplayable(), "window close and progress flush");
             var reopened = new LibraryStorageService();

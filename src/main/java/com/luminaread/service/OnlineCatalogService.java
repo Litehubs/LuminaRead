@@ -63,7 +63,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
 
     public OnlineCatalogService(OpdsFeedParser opdsFeedParser, IBookDownloader bookDownloader, HttpClient httpClient) {
         this.httpClient = (httpClient != null) ? httpClient : HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.ALWAYS)
+                .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(12))
                 .build();
         this.opdsFeedParser = (opdsFeedParser != null) ? opdsFeedParser : new OpdsFeedParser();
@@ -227,7 +227,7 @@ public class OnlineCatalogService implements IOnlineCatalogService {
 
             HttpResponse<byte[]> resp = HttpRequests.send(httpClient, req, FEED_BODY);
             if (resp.statusCode() >= 200 && resp.statusCode() < 300 && resp.body() != null) {
-                return opdsFeedParser.parseStrict(resp.body(), feedUrl, sourceLabel);
+                return opdsFeedParser.parseStrict(resp.body(), resp.uri().toString(), sourceLabel);
             }
             throw new java.io.IOException("Каталог вернул HTTP " + resp.statusCode());
         } catch (InterruptedException ex) {

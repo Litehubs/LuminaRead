@@ -26,8 +26,6 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
@@ -77,6 +75,7 @@ public class LibraryStorageService {
     private final Path dataDir;
     private final Path booksDir;
     private final Path stateFile;
+    private final BookCopies copies;
     private final SettingsJsonRepository settingsJsonRepository = new SettingsJsonRepository();
     private final ProgressStore progress;
     private final Set<String> bookIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -143,6 +142,7 @@ public class LibraryStorageService {
         this.booksDir = home.resolve("LuminaRead_Books");
         this.stateFile = dataDir.resolve("library_state.bin");
         this.progress = new ProgressStore(dataDir.resolve("progress"));
+        this.copies = new BookCopies(booksDir);
         initDirectories();
         loadState();
         publishShelf();
@@ -152,6 +152,7 @@ public class LibraryStorageService {
         try {
             Files.createDirectories(dataDir);
             Files.createDirectories(booksDir);
+            copies.recover();
         } catch (IOException ex) {
             throw new UncheckedIOException("Не удалось создать папки библиотеки", ex);
         }
@@ -312,39 +313,28 @@ public class LibraryStorageService {
         }
         if (sourceFile.length() == 0) throw new IllegalArgumentException("Файл пустой: " + sourceFile.getName());
 
-        File targetFile = sourceFile;
-        boolean copiedForImport = false;
-        if (copyToLibraryFolder && !sourceFile.toPath().startsWith(booksDir)) {
-            ImportDestination destination = reserveImportDestination(sourceFile.toPath());
-            Path dest = destination.path();
-            if (destination.reserved()) {
-                Path temp = null;
-                try {
-                    temp = Files.createTempFile(booksDir, ".luminaread-import-", ".tmp");
-                    Files.copy(sourceFile.toPath(), temp, StandardCopyOption.REPLACE_EXISTING);
+        Path source = sourceFile.toPath().toAbsolutePath().normalize();
+        // The app owns one profile lock. Serialize imports without holding the shelf/state monitor during I/O.
+        synchronized (copies) {
+            if (!copyToLibraryFolder || source.startsWith(booksDir)) return indexFile(source.toFile());
+            var copy = copies.publish(source);
+            try {
+                return indexFile(copy.path().toFile());
+            } catch (Exception ex) {
+                if (copy.created()) {
                     try {
-                        Files.move(temp, dest, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                    } catch (AtomicMoveNotSupportedException ignored) {
-                        Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING);
+                        Files.deleteIfExists(copy.path());
+                    } catch (IOException cleanup) {
+                        ex.addSuppressed(cleanup);
                     }
-                    copiedForImport = true;
-                } catch (Exception ex) {
-                    deleteAfterFailure(dest, ex);
-                    if (temp != null) deleteAfterFailure(temp, ex);
-                    throw ex;
                 }
+                throw ex;
             }
-            targetFile = dest.toFile();
         }
+    }
 
-        ParsedBook document;
-        try {
-            document = ParsedBook.read(BookFile.read(targetFile.toPath()));
-        } catch (Exception ex) {
-            if (copiedForImport) deleteAfterFailure(targetFile.toPath(), ex);
-            throw ex;
-        }
-
+    private Book indexFile(File targetFile) throws Exception {
+        ParsedBook document = ParsedBook.read(BookFile.read(targetFile.toPath()));
         String absPath = targetFile.getAbsolutePath();
         BookContent parsed = document.content();
         String format = document.format();
@@ -371,41 +361,6 @@ public class LibraryStorageService {
             bookIds.add(book.getId());
             cacheBook(book, document);
             return book;
-        }
-    }
-
-    private ImportDestination reserveImportDestination(Path source) throws Exception {
-        String fileName = source.getFileName().toString();
-        String suffix = fileName.toLowerCase(Locale.ROOT).endsWith(".fb2.zip") ? ".fb2.zip"
-                : fileName.substring(Math.max(0, fileName.lastIndexOf('.')));
-        String base = fileName.substring(0, fileName.length() - suffix.length());
-        for (int index = 2; ; index++) {
-            Path candidate = booksDir.resolve(index == 2 ? fileName : base + " (" + index + ")" + suffix);
-            if (Files.exists(candidate)) {
-                if (Files.isRegularFile(candidate) && Files.size(candidate) == Files.size(source)
-                        && Files.mismatch(candidate, source) == -1) return new ImportDestination(candidate, false);
-                continue;
-            }
-            synchronized (this) {
-                if (!Files.exists(candidate)) {
-                    try {
-                        Files.createFile(candidate);
-                        return new ImportDestination(candidate, true);
-                    } catch (java.nio.file.FileAlreadyExistsException ignored) {
-                        // Another import reserved this name; try the next suffix.
-                    }
-                }
-            }
-        }
-    }
-
-    private record ImportDestination(Path path, boolean reserved) {}
-
-    private static void deleteAfterFailure(Path file, Exception failure) {
-        try {
-            Files.deleteIfExists(file);
-        } catch (IOException cleanupFailure) {
-            failure.addSuppressed(cleanupFailure);
         }
     }
 

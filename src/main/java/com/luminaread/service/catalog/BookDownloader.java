@@ -70,7 +70,7 @@ public class BookDownloader implements IBookDownloader {
         if (maxDownloadBytes <= 0 || maxExpandedBytes <= 0) throw new IllegalArgumentException("Размеры должны быть положительными");
         if (transferTimeout == null || transferTimeout.toMillis() <= 0) throw new IllegalArgumentException("Timeout must be positive");
         this.httpClient = (httpClient != null) ? httpClient : HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.ALWAYS)
+                .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(15))
                 .build();
         this.updateListener = updateListener;

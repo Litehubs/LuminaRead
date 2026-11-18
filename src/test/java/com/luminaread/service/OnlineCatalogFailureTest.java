@@ -44,6 +44,41 @@ class OnlineCatalogFailureTest {
             assertTrue(oversized.getCause().getMessage().contains("Ответ каталога превышает"));
         } finally { server.stop(0); }
     }
+    @Test void relativeBookLinksFollowTheFinalCatalogAddress(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/start", exchange -> {
+            exchange.getResponseHeaders().set("Location", "/books/feed");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        });
+        server.createContext("/books/feed", exchange -> {
+            byte[] xml = """
+                    <feed><entry><title>Example</title><link rel="acquisition" href="book.txt"
+                      type="text/plain"/></entry></feed>
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, xml.length);
+            try (var out = exchange.getResponseBody()) { out.write(xml); }
+        });
+        server.createContext("/books/book.txt", exchange -> {
+            byte[] body = "A complete example book. ".repeat(4).getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            try (var out = exchange.getResponseBody()) { out.write(body); }
+        });
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            var catalog = new OnlineCatalogService();
+            var item = catalog.browseCustomOpds(base + "/start", "").get(0);
+            String link = item.getDownloadLinks().get("TXT");
+            assertEquals(base + "/books/book.txt", link);
+            var file = catalog.downloadBookFile(link, "Example", "TXT", dir, null);
+            assertEquals("A complete example book. ".repeat(4), java.nio.file.Files.readString(file.toPath()));
+        } finally {
+            server.stop(0);
+        }
+    }
+
     @Test void partialFailureKeepsBooksAndReportsUnavailableSource() {
         var book = new com.luminaread.model.OnlineBookItem("Book", "Author", "", "en", "Working");
         var tasks = new java.util.LinkedHashMap<String, java.util.concurrent.CompletableFuture<
