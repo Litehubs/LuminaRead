@@ -54,17 +54,17 @@ public final class YandexCallback implements AutoCloseable {
         try {
             return result.get(5, TimeUnit.MINUTES);
         } catch (TimeoutException ex) {
-            throw new IOException("Яндекс не вернул код за пять минут. Начните вход заново.");
+            throw new IOException("Яндекс не вернул код за пять минут. Начните вход заново.", ex);
         } catch (ExecutionException ex) {
             if (ex.getCause() instanceof IOException error) throw error;
-            throw new IOException("Не удалось завершить вход через Яндекс ID.");
+            throw new IOException("Не удалось завершить вход через Яндекс ID.", ex.getCause());
         }
     }
 
     private void handle(HttpExchange exchange) throws IOException {
         int status = 400;
         String acceptedCode = null;
-        boolean acceptedError = false;
+        String acceptedError = null;
         String message = "Не удалось подтвердить вход. Вернитесь в приложение.";
         try {
             String query = exchange.getRequestURI().getRawQuery();
@@ -89,7 +89,7 @@ public final class YandexCallback implements AutoCloseable {
                 message = "Код получен. Вернитесь в LuminaRead для завершения входа.";
             } else {
                 if (!accepted.compareAndSet(false, true)) return;
-                acceptedError = true;
+                acceptedError = error;
                 status = 200;
                 message = "Вход отменён. Вернитесь в LuminaRead.";
             }
@@ -109,14 +109,15 @@ public final class YandexCallback implements AutoCloseable {
                 try (var output = exchange.getResponseBody()) { output.write(body); }
             } finally {
                 if (acceptedCode != null) result.complete(acceptedCode);
-                else if (acceptedError) result.completeExceptionally(new IOException("Вход не подтверждён в Яндексе."));
+                else if ("access_denied".equals(acceptedError)) result.cancel(false);
+                else if (acceptedError != null) result.completeExceptionally(new IOException("Вход не подтверждён в Яндексе."));
             }
         }
     }
 
     @Override public void close() {
         if (closed.compareAndSet(false, true)) {
-            result.completeExceptionally(new IOException("Авторизация отменена."));
+            result.cancel(false);
             server.stop(0);
         }
     }

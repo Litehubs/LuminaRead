@@ -8,7 +8,9 @@ import com.luminaread.service.YandexAuthService.Status;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JDialog;
+import javax.swing.JOptionPane;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
@@ -30,11 +32,19 @@ final class AuthDialog extends JDialog {
     private final JTextArea status = new JTextArea(2, 36);
     private final JButton signIn;
     private final JButton signOut;
+    private final JCheckBox remember = new JCheckBox("Сохранить профиль на этом устройстве");
     private Login login;
 
     static void show(Component parent, ThemePalette theme) {
-        var dialog = new AuthDialog(parent, theme);
-        dialog.setVisible(true);
+        YandexAuthService.getInstance().ready().whenCompleteAsync((ignored, error) -> {
+            if (parent != null && !parent.isShowing()) return;
+            if (error != null) {
+                JOptionPane.showMessageDialog(parent, "Проверьте настройки приложения Яндекс ID.",
+                        "Вход недоступен", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            new AuthDialog(parent, theme).setVisible(true);
+        }, SwingUtilities::invokeLater);
     }
 
     private AuthDialog(Component parent, ThemePalette theme) {
@@ -57,7 +67,7 @@ final class AuthDialog extends JDialog {
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(theme.getCardBackground());
         panel.setBorder(new EmptyBorder(20, 24, 20, 24));
-        panel.setPreferredSize(new Dimension(455, account.profile() == null ? 200 : 240));
+        panel.setPreferredSize(new Dimension(455, account.profile() == null ? 235 : 275));
 
         var title = new JLabel(switch (account.status()) {
             case VERIFIED -> "Вход через Яндекс ID подтверждён";
@@ -75,6 +85,10 @@ final class AuthDialog extends JDialog {
             hint.setForeground(theme.getTextSecondary());
             panel.add(hint);
             panel.add(Box.createVerticalStrut(12));
+            remember.setSelected(saved);
+            remember.setOpaque(false);
+            remember.setForeground(theme.getTextPrimary());
+            panel.add(remember);
             panel.add(signIn);
         }
         if (account.profile() != null) {
@@ -115,7 +129,7 @@ final class AuthDialog extends JDialog {
     }
 
     private void signIn() {
-        Login attempt = auth.beginLogin();
+        Login attempt = auth.beginLogin(remember.isSelected());
         login = attempt;
         status.setText("Ожидание входа в браузере…");
         run(attempt::run);
@@ -131,14 +145,14 @@ final class AuthDialog extends JDialog {
             login = null;
             signIn.setEnabled(true);
             signOut.setEnabled(true);
+            if (error instanceof java.util.concurrent.CancellationException) { dispose(); return; }
             status.setText(error instanceof IOException ? error.getMessage() : "Не удалось обновить аккаунт.");
         });
     }
 
     private void cancelLogin() {
         if (login == null) return;
-        request.cancel();
-        login.close();
+        login.cancel();
         login = null;
     }
 }

@@ -18,6 +18,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CancellationException;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
@@ -31,7 +36,7 @@ final class YandexBrowserFlowTest {
         try (var provider = new Provider()) {
             Path file = home.resolve("yandex_account.json");
             var service = provider.service(file);
-            var login = service.beginLogin();
+            var login = service.beginLogin(true);
             YandexAuthService.Profile user = login.run();
             assertEquals("verified-id", user.id());
             assertEquals("verified", user.title());
@@ -45,7 +50,20 @@ final class YandexBrowserFlowTest {
             assertEquals("OAuth issued-token", provider.profileAuthorization.get());
             assertFalse(Files.readString(file).contains("issued-token"));
             assertFalse(Files.readString(file).contains("refresh-secret"));
-            assertThrows(IOException.class, login::run);
+            assertThrows(CancellationException.class, login::run);
+        }
+    }
+
+    @Test void sessionOnlySignInForgetsAnEarlierRememberedProfile(@TempDir Path home) throws Exception {
+        try (var provider = new Provider()) {
+            Path file = home.resolve("account.json");
+            var service = provider.service(file);
+            service.beginLogin(true).run();
+            assertTrue(Files.exists(file));
+            service.beginLogin(false).run();
+            assertEquals(YandexAuthService.Status.VERIFIED, service.account().status());
+            assertFalse(Files.exists(file));
+            assertEquals(YandexAuthService.Status.SIGNED_OUT, provider.service(file).account().status());
         }
     }
 
@@ -80,6 +98,39 @@ final class YandexBrowserFlowTest {
             provider.profileBody = "{\"id\":\"verified-id\",\"client_id\":\"another-app\"}";
             assertThrows(IOException.class, () -> service.beginLogin().run());
             assertEquals(YandexAuthService.Status.SIGNED_OUT, service.account().status());
+        }
+    }
+
+    @Test void closingDuringTokenExchangeTerminatesTheWorker(@TempDir Path home) throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var provider = new Provider()) {
+            provider.server.removeContext("/token");
+            provider.server.createContext("/token", request -> {
+                try (request) {
+                    entered.countDown();
+                    release.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            var service = provider.service(home.resolve("profile.json"));
+            var login = service.beginLogin();
+            var worker = Executors.newSingleThreadExecutor();
+            try {
+                var future = worker.submit(login::run);
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                login.cancel();
+                login.cancel();
+                var failure = assertThrows(ExecutionException.class,
+                        () -> future.get(2, TimeUnit.SECONDS));
+                assertInstanceOf(CancellationException.class, failure.getCause());
+                assertEquals(0, provider.profileRequests.get());
+                assertFalse(Files.exists(home.resolve("profile.json")));
+            } finally {
+                release.countDown();
+                worker.shutdownNow();
+            }
         }
     }
 
