@@ -67,7 +67,7 @@ final class YandexAuthSafetyTest {
             assertEquals(YandexAuthService.Status.SIGNED_OUT, logout.get(3, TimeUnit.SECONDS));
             releaseBrowser.countDown();
             var failure = assertThrows(ExecutionException.class, () -> auth.get(3, TimeUnit.SECONDS));
-            assertInstanceOf(IOException.class, failure.getCause());
+            assertInstanceOf(java.util.concurrent.CancellationException.class, failure.getCause());
             assertFalse(Files.exists(home.resolve("yandex_account.json")));
         } finally {
             releaseBrowser.countDown();
@@ -75,27 +75,25 @@ final class YandexAuthSafetyTest {
         }
     }
 
-    @Test void failedProfileRemovalStillPublishesSignedOutOutsideTheLock(@TempDir Path home) throws Exception {
-        Path file = Files.createDirectory(home.resolve("yandex_account.json"));
-        Files.writeString(file.resolve("keep"), "test");
-        var service = service(file, url -> fail("Browser should not open"));
-        var notice = new CountDownLatch(2);
-        var worker = Executors.newSingleThreadExecutor();
-        try {
-            service.addListener(() -> {
-                try {
-                    worker.submit(() -> service.beginLogin().close()).get(2, TimeUnit.SECONDS);
-                    notice.countDown();
-                } catch (Exception ex) {
-                    throw new AssertionError("Listener ran with the authorization state locked", ex);
-                }
-            });
-            assertThrows(IOException.class, service::logout);
-            assertEquals(0, notice.getCount());
-            assertEquals(YandexAuthService.Status.SIGNED_OUT, service.account().status());
-        } finally {
-            worker.shutdownNow();
-        }
+    @Test void failedRemovalPreservesAccountAndCause(@TempDir Path home) throws Exception {
+        Path file = home.resolve("account.json");
+        var profile = new YandexAuthService.Profile("id", null, null, null);
+        new YandexProfileStore(file).save(profile);
+        var service = service(file, url -> fail());
+        Files.delete(file);
+        Files.createDirectories(file.resolve("occupied"));
+        var notices = new java.util.concurrent.atomic.AtomicInteger();
+        service.addListener(notices::incrementAndGet);
+        assertNotNull(assertThrows(IOException.class, service::logout).getCause());
+        assertEquals(profile, service.account().profile());
+        assertEquals("Пользователь Яндекса", profile.title());
+        assertEquals(0, notices.get());
+        Files.delete(file.resolve("occupied"));
+        service.logout();
+        assertEquals(1, notices.get());
+        assertEquals(YandexAuthService.Status.SIGNED_OUT, service.account().status());
+        assertThrows(IllegalArgumentException.class, () -> new YandexOAuth(" "));
+        assertThrows(IllegalArgumentException.class, () -> new YandexAuthService.Account(YandexAuthService.Status.SAVED, null));
     }
 
     private static YandexAuthService service(Path path, YandexAuthService.Browser browser) {

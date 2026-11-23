@@ -86,6 +86,7 @@ public class SettingsPanel extends JPanel {
 
         applyTheme(currentTheme);
         yandex.addListener(authListener);
+        updateAccountLabel();
     }
 
     private void buildFullSettingsSections() {

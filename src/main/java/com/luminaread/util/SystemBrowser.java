@@ -19,7 +19,7 @@ public final class SystemBrowser {
             desktop.browse(address);
         } catch (IOException | UnsupportedOperationException | SecurityException ex) {
             // Desktop failures can include the URL and its OAuth state.
-            throw new IOException("Не удалось открыть браузер.");
+            throw new IOException("Не удалось открыть браузер.", ex);
         }
     }
 }

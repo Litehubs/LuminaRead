@@ -36,10 +36,11 @@ public class LuminaReadApp {
         ModernUiFactory.installGlobalUiFonts();
 
         ProfileLock lock;
-        Path profile = Path.of(System.getProperty("user.home"), ".luminaread");
+        Path profile;
         try {
+            profile = Path.of(System.getProperty("user.home"), ".luminaread");
             lock = ProfileLock.acquire(profile);
-        } catch (java.io.IOException | SecurityException ex) {
+        } catch (java.io.IOException | InvalidPathException | SecurityException ex) {
             showStartupError(ex);
             return;
         }

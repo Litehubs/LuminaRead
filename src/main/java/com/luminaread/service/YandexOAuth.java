@@ -33,13 +33,13 @@ final class YandexOAuth {
     }
 
     YandexOAuth(String clientId, URI tokenUrl, URI profileUrl) {
+        if (clientId == null || clientId.isBlank()) throw new IllegalArgumentException("Не задан идентификатор приложения Яндекс ID.");
         this.clientId = clientId;
         this.tokenUrl = tokenUrl;
         this.profileUrl = profileUrl;
     }
 
     YandexPkce newPkce() throws IOException {
-        if (clientId.isBlank()) throw new IOException("Не задан идентификатор приложения Яндекс ID.");
         return YandexPkce.create(clientId);
     }
 
@@ -77,13 +77,13 @@ final class YandexOAuth {
             return pending.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException ex) {
             pending.cancel(true);
-            throw new IOException("Яндекс не ответил вовремя.");
+            throw new IOException("Яндекс не ответил вовремя.", ex);
         } catch (InterruptedException ex) {
             pending.cancel(true);
             throw ex;
         } catch (ExecutionException ex) {
             if (ex.getCause() instanceof BoundedHttpBody.LimitExceededException error) throw error;
-            throw new IOException("Не удалось получить ответ от Яндекса.");
+            throw new IOException("Не удалось получить ответ от Яндекса.", ex.getCause());
         }
     }
 
@@ -91,12 +91,13 @@ final class YandexOAuth {
         try {
             if (Json.parse(new String(response.body(), StandardCharsets.UTF_8)) instanceof Map<?, ?> fields) return fields;
         } catch (IllegalArgumentException ex) {
-            // Do not expose OAuth response data to UI or logs.
+            throw new IOException("Яндекс вернул некорректный ответ.", ex);
         }
         throw new IOException("Яндекс вернул некорректный ответ.");
     }
 
     private static IOException exchangeFailure(HttpResponse<byte[]> response) {
+        String message = "Яндекс не подтвердил вход (HTTP " + response.statusCode() + ").";
         try {
             Object error = json(response).get("error");
             if ("invalid_grant".equals(error)) return new IOException("Код входа недействителен. Начните вход заново.");
@@ -104,9 +105,9 @@ final class YandexOAuth {
                 return new IOException("Яндекс отклонил настройки OAuth приложения.");
             }
         } catch (IOException ex) {
-            // Non-JSON errors are reported by status only.
+            return new IOException(message, ex);
         }
-        return new IOException("Яндекс не подтвердил вход (HTTP " + response.statusCode() + ").");
+        return new IOException(message);
     }
 
     private static String form(String value) {
