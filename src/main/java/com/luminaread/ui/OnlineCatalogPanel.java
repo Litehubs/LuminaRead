@@ -18,6 +18,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
+import javax.swing.SwingUtilities;
 import javax.swing.JTextField;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -48,6 +49,7 @@ public class OnlineCatalogPanel extends JPanel {
     private final Runnable downloadListener = this::refreshDownloadProgress;
     private DownloadTask currentDownload;
     private boolean disposed;
+    private long catalogGeneration;
     private final LatestSwingRequest<SearchResult> catalogRequests = new LatestSwingRequest<>();
 
     private ThemePalette currentTheme;
@@ -192,7 +194,11 @@ public class OnlineCatalogPanel extends JPanel {
         resultsListPanel.revalidate();
         resultsListPanel.repaint();
 
-        startCatalogLoad(() -> catalogService.searchBooksDetailed(query, sourceCode, langCode));
+        long generation = catalogGeneration + 1;
+        startCatalogLoad(() -> catalogService.searchBooksDetailed(query, sourceCode, langCode, result ->
+                SwingUtilities.invokeLater(() -> {
+                    if (!disposed && catalogGeneration == generation) renderSearchResults(result);
+                })));
     }
 
     private void executeCustomOpdsBrowse() {
@@ -212,6 +218,7 @@ public class OnlineCatalogPanel extends JPanel {
 
     private void startCatalogLoad(java.util.function.Supplier<SearchResult> request) {
         if (disposed) return;
+        catalogGeneration++;
         catalogRequests.start(request::get, result -> {
             hideCatalogProgress();
             renderSearchResults(result);

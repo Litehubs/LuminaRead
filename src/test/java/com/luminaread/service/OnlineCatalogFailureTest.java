@@ -81,19 +81,54 @@ class OnlineCatalogFailureTest {
 
     @Test void partialFailureKeepsBooksAndReportsUnavailableSource() {
         var book = new com.luminaread.model.OnlineBookItem("Book", "Author", "", "en", "Working");
-        var tasks = new java.util.LinkedHashMap<String, java.util.concurrent.CompletableFuture<
+        var tasks = new java.util.LinkedHashMap<String, java.util.concurrent.Callable<
                 java.util.List<com.luminaread.model.OnlineBookItem>>>();
         var broken = new java.io.IOException("offline");
-        tasks.put("Missing", java.util.concurrent.CompletableFuture.failedFuture(broken));
-        tasks.put("Working", java.util.concurrent.CompletableFuture.completedFuture(java.util.List.of(book)));
+        tasks.put("Missing", () -> { throw broken; });
+        tasks.put("Working", () -> java.util.List.of(book));
 
-        var result = OnlineCatalogService.collectSearchResults(tasks);
+        var result = OnlineCatalogService.collectSearchResults(tasks, java.time.Duration.ofSeconds(2), ignored -> {});
         assertEquals(java.util.List.of(book), result.books());
         assertEquals(java.util.List.of("Missing"), result.unavailableSources());
 
         tasks.remove("Working");
-        var failure = assertThrows(IllegalStateException.class, () -> OnlineCatalogService.collectSearchResults(tasks));
+        var failure = assertThrows(IllegalStateException.class, () -> OnlineCatalogService.collectSearchResults(tasks, java.time.Duration.ofSeconds(2), ignored -> {}));
         assertArrayEquals(new Throwable[]{broken}, failure.getSuppressed());
+    }
+
+    @Test void readyBooksAppearBeforeSlowMirrorAndTimeoutInterruptsIt() throws Exception {
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var interrupted = new java.util.concurrent.CountDownLatch(1);
+        var updates = new java.util.concurrent.LinkedBlockingQueue<OnlineCatalogService.SearchResult>();
+        var book = new com.luminaread.model.OnlineBookItem("Book", "Author", "", "en", "Fast");
+        var tasks = new java.util.LinkedHashMap<String,
+                java.util.concurrent.Callable<java.util.List<com.luminaread.model.OnlineBookItem>>>();
+        tasks.put("Slow", () -> {
+            started.countDown();
+            try {
+                new java.util.concurrent.CountDownLatch(1).await();
+                return java.util.List.of();
+            } finally {
+                interrupted.countDown();
+            }
+        });
+        tasks.put("Fast", () -> {
+            assertTrue(started.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            return java.util.List.of(book);
+        });
+        var worker = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var search = worker.submit(() -> OnlineCatalogService.collectSearchResults(
+                    tasks, java.time.Duration.ofSeconds(1), updates::add));
+            var first = updates.poll(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertNotNull(first);
+            assertEquals(java.util.List.of(book), first.books());
+            assertTrue(first.unavailableSources().isEmpty());
+            assertEquals(java.util.List.of("Slow"), search.get(2, java.util.concurrent.TimeUnit.SECONDS).unavailableSources());
+            assertTrue(interrupted.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        } finally {
+            worker.shutdownNow();
+        }
     }
 
     @Test void gutenbergMetadataDoesNotDependOnJsonFieldOrder() {
