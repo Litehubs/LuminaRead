@@ -1,7 +1,9 @@
 package com.luminaread.service.catalog;
 
 import com.luminaread.model.DownloadTask;
+import com.luminaread.parser.BookParserFactory;
 import com.luminaread.util.TimedInput;
+import com.luminaread.util.Json;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -17,11 +19,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.io.IOException;
 import java.util.Locale;
 import java.util.function.DoubleConsumer;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 
@@ -32,9 +34,6 @@ import java.util.zip.GZIPInputStream;
 public class BookDownloader implements IBookDownloader {
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) LuminaRead/2.2";
-
-    private static final Pattern ARCHIVE_FILE_NAME_PATTERN = Pattern.compile(
-            "\"name\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
 
     private static final Pattern UNSAFE_FILENAME_CHARACTERS =
             Pattern.compile("[\\p{Cc}\\p{Cs}\\\\/:*?\"<>|]");
@@ -124,7 +123,9 @@ public class BookDownloader implements IBookDownloader {
             if (contentLength > maxDownloadBytes) throw new IllegalStateException("Размер загрузки превышает допустимый предел.");
             task.setTotalBytes(contentLength);
 
-            String ext = determineExtension(effectiveUrl, task.getFormat(), contentType,
+            String exactArchiveExt = "archive.org".equalsIgnoreCase(req.uri().getHost())
+                    && req.uri().getPath().startsWith("/download/") ? archiveExtension(task.getFormat()) : null;
+            String ext = exactArchiveExt != null ? exactArchiveExt : determineExtension(effectiveUrl, task.getFormat(), contentType,
                     response.headers().firstValue("Content-Disposition").orElse(""));
 
             String safeBaseName = portableBaseName(task.getTitle());
@@ -174,6 +175,12 @@ public class BookDownloader implements IBookDownloader {
 
             outFile = decompressGzipIfNeeded(outFile);
             validateDownloadedBookFile(outFile, task.getFormat());
+            if (exactArchiveExt != null && !exactArchiveExt.equals(".txt")) {
+                String actualFormat = BookParserFactory.detectFormatLabel(outFile);
+                if (!exactArchiveExt.equals(archiveExtension(actualFormat))) {
+                    throw new IllegalStateException("Internet Archive вернул файл другого формата.");
+                }
+            }
 
             Path savedPath;
             int suffix = 0;
@@ -256,7 +263,7 @@ public class BookDownloader implements IBookDownloader {
     }
 
     public void validateDownloadedBookFile(File file, String requestedFormat) throws Exception {
-        if (file == null || !file.exists() || file.length() < 64) {
+        if (file == null || !file.isFile() || file.length() == 0) {
             throw new IllegalStateException("Скачанный файл пуст (0 КБ). Попробуйте другой формат или источник.");
         }
 
@@ -316,70 +323,76 @@ public class BookDownloader implements IBookDownloader {
     }
 
     public String resolveBestArchiveOrgUrl(String originalUrl, String formatHint) {
-        if (originalUrl == null || !originalUrl.contains("archive.org/download/")) {
+        if (originalUrl == null) return null;
+        URI uri = URI.create(originalUrl);
+        if (!"archive.org".equalsIgnoreCase(uri.getHost())) return originalUrl;
+        String[] path = uri.getPath().split("/", 4);
+        if (path.length < 3 || !"download".equals(path[1]) || !path[2].matches("[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}")) {
             return originalUrl;
         }
-        try {
-            String afterDownload = originalUrl.substring(originalUrl.indexOf("archive.org/download/") + "archive.org/download/".length());
-            int slash = afterDownload.indexOf('/');
-            if (slash <= 0) return originalUrl;
-            String iaId = afterDownload.substring(0, slash);
+        String extension = archiveExtension(formatHint);
+        if (extension == null) return originalUrl;
+        String originalFile = path.length == 4 ? path[3] : "";
+        String archiveId = path[2];
+        List<?> files = archiveFiles(archiveId);
 
-            String metaUrl = "https://archive.org/metadata/" + iaId + "/files";
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(metaUrl))
-                    .header("User-Agent", USER_AGENT)
-                    .timeout(Duration.ofSeconds(10))
-                    .GET()
-                    .build();
-
-            HttpResponse<InputStream> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
-            String metadata;
-            try (InputStream input = new TimedInput(resp.body(), Duration.ofSeconds(10))) {
-                if (resp.statusCode() != 200) return originalUrl;
-                byte[] bytes = input.readNBytes(2 * 1024 * 1024 + 1);
-                if (bytes.length > 2 * 1024 * 1024) return originalUrl;
-                metadata = new String(bytes, StandardCharsets.UTF_8);
-            }
-
-            List<String> fileNames = new ArrayList<>();
-            Matcher m = ARCHIVE_FILE_NAME_PATTERN.matcher(metadata);
-            while (m.find()) {
-                String fn = unescapeJson(m.group(1));
-                if (!fn.isBlank()) fileNames.add(fn);
-            }
-
-            String targetExt = ".epub";
-            if (formatHint != null) {
-                String h = formatHint.toUpperCase(Locale.ROOT);
-                if (h.contains("PDF")) targetExt = ".pdf";
-                else if (h.contains("FB2")) targetExt = ".fb2";
-                else if (h.contains("TXT")) targetExt = ".txt";
-            }
-
-            for (String fn : fileNames) {
-                String lower = fn.toLowerCase(Locale.ROOT);
-                if (lower.endsWith(targetExt) && !lower.contains("encrypted")) {
-                    return buildArchiveDownloadUrl(iaId, fn);
+        if (files != null) {
+            String alternative = null;
+            for (Object entry : files) {
+                if (!(entry instanceof Map<?, ?> file) || !(file.get("name") instanceof String name)
+                        || !matchesArchiveFormat(name, extension)
+                        || file.get("format") instanceof String kind && kind.toLowerCase(Locale.ROOT).contains("encrypted")) {
+                    continue;
                 }
+                if (name.equals(originalFile)) return originalUrl;
+                if (alternative == null) alternative = name;
             }
+            if (alternative != null) return buildArchiveDownloadUrl(archiveId, alternative);
+        } else if (matchesArchiveFormat(originalFile, extension)) {
+            return originalUrl;
+        }
+        throw new IllegalStateException("В Internet Archive не найден файл формата " + formatHint + ".");
+    }
 
-            String[] fallbackExts = {".fb2.zip", ".fb2", ".epub", ".pdf", "_djvu.txt", ".txt"};
-            for (String ext : fallbackExts) {
-                for (String fn : fileNames) {
-                    String lower = fn.toLowerCase(Locale.ROOT);
-                    if (lower.endsWith(ext) && !lower.contains("encrypted")) {
-                        return buildArchiveDownloadUrl(iaId, fn);
-                    }
+    private List<?> archiveFiles(String archiveId) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create("https://archive.org/metadata/" + archiveId + "/files"))
+                    .header("User-Agent", USER_AGENT).timeout(Duration.ofSeconds(10)).GET().build();
+            var response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            try (InputStream input = new TimedInput(response.body(), Duration.ofSeconds(10))) {
+                if (response.statusCode() != 200) return null;
+                byte[] bytes = input.readNBytes(2 * 1024 * 1024 + 1);
+                if (bytes.length > 2 * 1024 * 1024) return null;
+                if (Json.parse(new String(bytes, StandardCharsets.UTF_8)) instanceof Map<?, ?> metadata) {
+                    if (metadata.get("files") instanceof List<?> files) return files;
+                    if (metadata.get("result") instanceof List<?> files) return files;
                 }
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-        } catch (Exception ex) {
+            throw new java.util.concurrent.CancellationException("Загрузка отменена.");
+        } catch (IOException | IllegalArgumentException ex) {
             java.util.logging.Logger.getLogger(BookDownloader.class.getName())
-                    .log(java.util.logging.Level.FINE, "Не удалось получить метаданные Internet Archive; используется исходная ссылка", ex);
+                    .log(java.util.logging.Level.FINE, "Не удалось получить метаданные Internet Archive", ex);
         }
-        return originalUrl;
+        return null;
+    }
+
+    private static String archiveExtension(String format) {
+        if (format == null) return null;
+        return switch (format.strip().toUpperCase(Locale.ROOT)) {
+            case "EPUB" -> ".epub";
+            case "PDF" -> ".pdf";
+            case "TXT" -> ".txt";
+            case "FB2" -> ".fb2";
+            case "FB2.ZIP" -> ".fb2.zip";
+            default -> null;
+        };
+    }
+
+    private static boolean matchesArchiveFormat(String name, String extension) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return !lower.contains("encrypted") && lower.endsWith(extension);
     }
 
     private String buildArchiveDownloadUrl(String iaId, String fileName) {
@@ -400,35 +413,4 @@ public class BookDownloader implements IBookDownloader {
         }
     }
 
-    private static String unescapeJson(String s) {
-        if (s == null) return "";
-        StringBuilder sb = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '\\' && i + 1 < s.length()) {
-                char next = s.charAt(++i);
-                switch (next) {
-                    case '"' -> sb.append('"');
-                    case '\\' -> sb.append('\\');
-                    case '/' -> sb.append('/');
-                    case 'n', 'r', 't' -> sb.append(' ');
-                    case 'u' -> {
-                        if (i + 4 < s.length()) {
-                            String hex = s.substring(i + 1, i + 5);
-                            try {
-                                sb.append((char) Integer.parseInt(hex, 16));
-                                i += 4;
-                            } catch (NumberFormatException e) {
-                                sb.append("\\u").append(hex);
-                            }
-                        }
-                    }
-                    default -> sb.append(next);
-                }
-            } else {
-                sb.append(c);
-            }
-        }
-        return sb.toString().trim();
-    }
 }
