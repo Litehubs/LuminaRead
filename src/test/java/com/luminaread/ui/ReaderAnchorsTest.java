@@ -32,7 +32,7 @@ class ReaderAnchorsTest {
         for (boolean spread : List.of(false, true)) {
             for (int size : List.of(800, 1600)) {
                 var pages = new ReaderTextSearch.Layout(ReaderSettings.ReadingMode.PAGED, size, spread).pages(chapter);
-                var target = new ReaderAnchors(pages).locate(position);
+                var target = new ReaderAnchors(pages).index().locate(position);
                 assertNotNull(target);
                 assertTrue(target.page() > 0);
                 var document = ReaderTextSearch.readPage(kit, pages.get(target.page()));
@@ -40,6 +40,27 @@ class ReaderAnchorsTest {
                 assertEquals(marker, document.getText(offset, marker.length()));
             }
         }
+    }
+
+    @Test void quoteRangesSelectOnlyTheChosenOccurrenceAcrossTagsAndRepagination() throws Exception {
+        var kit = new ReaderHtmlKit();
+        String first = "<p>Hello <em>world</em>!</p>";
+        String second = "<p>Hello world!</p>";
+        var document = ReaderTextSearch.readPage(kit, first + second);
+        String text = document.getText(0, document.getLength());
+        int start = text.indexOf("Hello world!");
+        var range = new ReaderAnchors(List.of(first + second)).selection(0, document, start, start + 12);
+        assertNotNull(range);
+        var paged = new ReaderAnchors(List.of(first, second));
+        assertNull(paged.locate(range.start()), "A cold lookup must not parse earlier pages");
+        paged.index();
+        assertEquals(new ReaderAnchors.Target(0, 0), paged.locate(range.start()));
+        var firstDoc = ReaderTextSearch.readPage(kit, first);
+        String firstText = firstDoc.getText(0, firstDoc.getLength());
+        var mapped = paged.onPage(0, firstText, range.start(), range.end());
+        assertEquals("Hello world!", firstText.substring(mapped.start(), mapped.end()));
+        var secondDoc = ReaderTextSearch.readPage(kit, second);
+        assertNull(paged.onPage(1, secondDoc.getText(0, secondDoc.getLength()), range.start(), range.end()));
     }
 
     @Test void crossChapterFb2NoteUsesSectionIdentifier(@TempDir Path dir) throws Exception {
