@@ -20,6 +20,8 @@ public class Highlight implements Serializable {
     private final int chapterIndex;
     private final String chapterTitle;
     private final String selectedText;
+    private int textStart;
+    private int textEnd;
     private String note;
     private String colorHex;
     private final long createdAt;
@@ -43,6 +45,16 @@ public class Highlight implements Serializable {
     public int getChapterIndex() { return chapterIndex; }
     public String getChapterTitle() { return chapterTitle; }
     public String getSelectedText() { return selectedText; }
+    public boolean hasTextRange() { return textStart > 0 && textEnd > textStart; }
+    public int getTextStart() { return textStart - 1; }
+    public int getTextEnd() { return textEnd - 1; }
+
+    public void setTextRange(int start, int end) {
+        if (start < 0 || end <= start || end == Integer.MAX_VALUE) throw new IllegalArgumentException("Invalid text range");
+        textStart = start + 1;
+        textEnd = end + 1;
+    }
+
     public String getNote() { return note; }
     public void setNote(String note) { this.note = note != null ? note.trim() : ""; }
     public String getColorHex() { return normalizeColor(colorHex); }

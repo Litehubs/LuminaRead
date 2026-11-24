@@ -13,7 +13,7 @@ final class ReaderMarkupDecorator {
     static String decorate(String html, List<Highlight> highlights, int chapterIndex) {
         String result = html;
         for (Highlight highlight : highlights) {
-            if (highlight.getChapterIndex() != chapterIndex || highlight.getSelectedText().length() < 4) continue;
+            if (highlight.hasTextRange() || highlight.getChapterIndex() != chapterIndex || highlight.getSelectedText().length() < 4) continue;
             String color = highlight.getColorHex();
             result = decorateText(result, HtmlSanitizer.escapeHtml(highlight.getSelectedText()),
                     "<span style='background-color:" + color + "; color:#111111;'>", "</span>");

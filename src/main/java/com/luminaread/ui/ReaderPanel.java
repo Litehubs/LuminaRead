@@ -83,6 +83,8 @@ public class ReaderPanel extends JPanel {
     private boolean disposed;
     private final Timer restoreScrollTimer;
     private ReaderAnchors anchors;
+    private final LatestSwingRequest<ReaderAnchors> anchorIndex = new LatestSwingRequest<>();
+    private final List<Object> quoteMarkers = new java.util.ArrayList<>();
     private int pendingTextOffset = -1;
     private String pendingLink;
     private String legacyBookmark;
@@ -571,6 +573,25 @@ public class ReaderPanel extends JPanel {
         }
 
         showPageAt(position.scrollOffset(), target == null ? -1 : target.offset(), link, position.textOffset());
+        if (!anchors.isReady()) {
+            var document = bookEditorPane.getDocument();
+            anchorIndex.start(() -> new ReaderAnchors(pages).index(), indexed -> {
+                if (currentChapterPages != pages || closing || disposed) return;
+                anchors = indexed;
+                var exact = indexed.locate(position.textOffset());
+                if (exact != null && document == bookEditorPane.getDocument()
+                        && position.textOffset() == currentBook.getTextOffset()) {
+                    currentPageIndex = exact.page();
+                    showPageAt(position.scrollOffset(), exact.offset(), link, position.textOffset());
+                } else {
+                    paintSavedQuotes();
+                    saveReadingProgress();
+                }
+            }, error -> java.util.logging.Logger.getLogger(ReaderPanel.class.getName()).log(
+                    java.util.logging.Level.FINE, "Не удалось построить индекс главы", error));
+        } else {
+            anchorIndex.cancel();
+        }
     }
 
     private void followLink(String href) {
@@ -674,7 +695,9 @@ public class ReaderPanel extends JPanel {
             htmlFragment = htmlFragment.replace("<img ", "<img width='" + imgWidth + "' ");
         }
 
+        clearQuoteMarkers();
         bookEditorPane.setText(ReaderHtmlKit.pageHtml(htmlFragment));
+        paintSavedQuotes();
         showSearchHighlight(false);
         pageShownAt = System.nanoTime();
         var document = bookEditorPane.getDocument();
@@ -769,6 +792,35 @@ public class ReaderPanel extends JPanel {
         return ReaderMarkupDecorator.decorate(html, highlights, currentChapterIndex);
     }
 
+    private void clearQuoteMarkers() {
+        quoteMarkers.forEach(bookEditorPane.getHighlighter()::removeHighlight);
+        quoteMarkers.clear();
+    }
+
+    private void paintSavedQuotes() {
+        clearQuoteMarkers();
+        if (anchors == null || currentBook == null) return;
+        var doc = bookEditorPane.getDocument();
+        var quotes = storageService.getHighlights(currentBook.getId()).stream()
+                .filter(quote -> quote.hasTextRange() && quote.getChapterIndex() == currentChapterIndex).toList();
+        if (quotes.isEmpty()) return;
+        try {
+            String text = doc.getText(0, doc.getLength());
+            for (Highlight quote : quotes) {
+                var range = anchors.onPage(currentPageIndex, text, quote.getTextStart(), quote.getTextEnd());
+                if (range != null) {
+                    java.awt.Color color = java.awt.Color.decode(quote.getColorHex());
+                    if (currentTheme.isDark()) color = color.darker().darker().darker();
+                    var painter = new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(color);
+                    quoteMarkers.add(bookEditorPane.getHighlighter().addHighlight(range.start(), range.end(), painter));
+                }
+            }
+        } catch (javax.swing.text.BadLocationException ex) {
+            java.util.logging.Logger.getLogger(ReaderPanel.class.getName()).log(
+                    java.util.logging.Level.FINE, "Не удалось показать цитату", ex);
+        }
+    }
+
     public void navigateForward() {
         if (currentContent == null || currentContent.getChapters().isEmpty()) return;
         ReaderSettings settings = storageService.getSettings();
@@ -824,6 +876,8 @@ public class ReaderPanel extends JPanel {
     }
 
     void focusText() {
+        if (anchors == null && currentContent != null) restoreVisiblePosition();
+        paintSavedQuotes();
         bookEditorPane.requestFocusInWindow();
     }
 
@@ -839,7 +893,9 @@ public class ReaderPanel extends JPanel {
         int range = bar.getMaximum() - bar.getMinimum() - bar.getVisibleAmount();
         ReaderProgress.update(currentBook, currentChapterIndex, currentContent.getChapters().size(), currentPageIndex,
                 currentChapterPages.size(), scrolling, pendingScrollOffset == null, bar.getValue() - bar.getMinimum(), range);
-        if (pendingScrollOffset == null) currentBook.setTextOffset(captureTextOffset());
+        if (pendingScrollOffset == null && anchors != null && anchors.isReady()) {
+            currentBook.setTextOffset(captureTextOffset());
+        }
         storageService.saveProgress(currentBook);
         updateStatusBar();
     }
@@ -1020,10 +1076,26 @@ public class ReaderPanel extends JPanel {
 
     private void createHighlightFromSelection() {
         if (currentBook == null || currentContent == null || currentContent.getChapters().isEmpty()) return;
+        Book book = currentBook;
+        BookContent content = currentContent;
+        int chapter = currentChapterIndex;
         String selected = bookEditorPane.getSelectedText();
+        ReaderTextSearch.Range range = null;
         if (selected == null || selected.isBlank()) {
             selected = JOptionPane.showInputDialog(this,
                     "Выделите текст мышью на странице или введите цитату вручную:");
+        } else {
+            try {
+                if (anchors != null) range = anchors.selection(currentPageIndex, bookEditorPane.getDocument(),
+                        bookEditorPane.getSelectionStart(), bookEditorPane.getSelectionEnd());
+            } catch (javax.swing.text.BadLocationException ex) {
+                UiPersistenceErrors.show(this, "Не удалось определить позицию цитаты.", ex);
+                return;
+            }
+            if (range == null) {
+                JOptionPane.showMessageDialog(this, "Позиция выделения ещё недоступна. Повторите после загрузки страницы.");
+                return;
+            }
         }
         if (selected == null || selected.isBlank()) return;
 
@@ -1049,19 +1121,23 @@ public class ReaderPanel extends JPanel {
                 case 3 -> "#F9A8D4";
                 default -> "#FDE047";
             };
-            Chapter ch = currentContent.getChapters().get(currentChapterIndex);
-            Highlight hl = new Highlight(
-                    currentBook.getId(),
-                    currentBook.getTitle(),
-                    currentChapterIndex,
-                    ch.getTitle(),
-                    selected,
-                    noteField.getText(),
-                    hex
-            );
-            UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить цитату.", () -> storageService.addHighlight(hl));
-            renderCurrentViewport();
+            Chapter ch = content.getChapters().get(chapter);
+            Highlight hl = new Highlight(book.getId(), book.getTitle(), chapter, ch.getTitle(),
+                    selected, noteField.getText(), hex);
+            if (range != null) hl.setTextRange(range.start(), range.end());
+            saveQuote(hl, content);
         }
+    }
+
+    void saveQuote(Highlight quote, BookContent content) {
+        UiPersistenceErrors.defer(this, storageService, "Не удалось сохранить цитату.",
+                () -> storageService.addHighlight(quote), () -> {
+                    if (disposed || closing || !isShowing() || currentContent != content || currentBook == null
+                            || !quote.getBookId().equals(currentBook.getId())
+                            || currentChapterIndex != quote.getChapterIndex()) return;
+                    if (quote.hasTextRange()) paintSavedQuotes();
+                    else renderCurrentViewport();
+                });
     }
 
     private void translateSelectedText() {
@@ -1174,7 +1250,8 @@ public class ReaderPanel extends JPanel {
     private void restoreVisiblePosition() {
         if (currentBook == null || chapterLayout == null || currentContent == null) return;
         boolean sameMode = chapterLayout.mode() == storageService.getSettings().getReadingMode();
-        int offset = pendingScrollOffset == null ? captureTextOffset() : currentBook.getTextOffset();
+        int offset = pendingScrollOffset == null && anchors != null && anchors.isReady()
+                ? captureTextOffset() : currentBook.getTextOffset();
         goToPosition(new ReadingPosition(currentChapterIndex, currentPageIndex, sameMode ? currentBook.getScrollOffset() : 0,
                 offset, null), null);
     }
@@ -1184,6 +1261,8 @@ public class ReaderPanel extends JPanel {
         saveReadingProgress();
         bookLoader.cancel();
         dictionaryLookup.cancel();
+        anchorIndex.cancel();
+        if (anchors != null && !anchors.isReady()) anchors = null;
         links.cancel();
         clearSearch();
         if (autoScrollActive) {
