@@ -1,6 +1,7 @@
 package com.luminaread.service.catalog;
 
 import com.luminaread.model.DownloadTask;
+import com.luminaread.parser.BookParserFactory;
 import com.luminaread.util.TimedInput;
 import com.luminaread.util.Json;
 
@@ -174,6 +175,12 @@ public class BookDownloader implements IBookDownloader {
 
             outFile = decompressGzipIfNeeded(outFile);
             validateDownloadedBookFile(outFile, task.getFormat());
+            if (exactArchiveExt != null && !exactArchiveExt.equals(".txt")) {
+                String actualFormat = BookParserFactory.detectFormatLabel(outFile);
+                if (!exactArchiveExt.equals(archiveExtension(actualFormat))) {
+                    throw new IllegalStateException("Internet Archive вернул файл другого формата.");
+                }
+            }
 
             Path savedPath;
             int suffix = 0;
@@ -333,7 +340,10 @@ public class BookDownloader implements IBookDownloader {
             String alternative = null;
             for (Object entry : files) {
                 if (!(entry instanceof Map<?, ?> file) || !(file.get("name") instanceof String name)
-                        || !matchesArchiveFormat(name, extension)) continue;
+                        || !matchesArchiveFormat(name, extension)
+                        || file.get("format") instanceof String kind && kind.toLowerCase(Locale.ROOT).contains("encrypted")) {
+                    continue;
+                }
                 if (name.equals(originalFile)) return originalUrl;
                 if (alternative == null) alternative = name;
             }

@@ -21,13 +21,22 @@ final class DownloadLimitTest {
 
     @Test void archiveMetadataNeverSubstitutesAnUnavailableFormat() {
         var downloader = new BookDownloader(new DownloadSafetyTest.FakeClient("""
-                {"result":[{"name":"book.pdf"},{"name":"encrypted.epub"},{"name":"book.fb2.zip"}]}
+                {"result":[{"name":"book.pdf"},{"name":"book.epub","format":"Encrypted EPUB"},{"name":"book.fb2.zip"}]}
                 """), null);
         String original = "https://archive.org/download/item/book.pdf";
         assertThrows(IllegalStateException.class, () -> downloader.resolveBestArchiveOrgUrl(original, "EPUB"));
         assertEquals("https://archive.org/download/item/book.fb2.zip",
                 downloader.resolveBestArchiveOrgUrl(original, "FB2.ZIP"));
         assertEquals(original, downloader.resolveBestArchiveOrgUrl(original, "PDF"));
+    }
+
+    @Test void archiveFilenameDoesNotTurnAnInvalidPayloadIntoAnEpub(@TempDir Path dir) throws Exception {
+        var downloader = new BookDownloader(new DownloadSafetyTest.FakeClient(
+                "{\"result\":[{\"name\":\"book.epub\"}]}"), null);
+        var failure = assertThrows(IllegalStateException.class, () ->
+                downloader.downloadBookFile("https://archive.org/download/item/book.epub", "book", "EPUB", dir, null));
+        assertTrue(failure.getMessage().contains("другого формата"));
+        try (var entries = Files.list(dir)) { assertEquals(0, entries.count()); }
     }
 
     @Test void unexpectedHtmlIsRejectedEvenWithoutKnownErrorKeywords(@TempDir Path dir) throws Exception {

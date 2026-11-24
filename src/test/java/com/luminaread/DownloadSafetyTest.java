@@ -25,7 +25,7 @@ public final class DownloadSafetyTest {
         Files.writeString(existing, "existing book");
         try {
             try {
-                new BookDownloader(new FakeClient("short"), null).downloadBookFile("http://example.com/book.txt", "book", "TXT", dir, null);
+                new BookDownloader(new FakeClient(""), null).downloadBookFile("http://example.com/book.txt", "book", "TXT", dir, null);
                 throw new AssertionError("Invalid download must fail");
             } catch (IllegalStateException expected) {
                 if (!Files.exists(existing) || !Files.readString(existing).equals("existing book"))
