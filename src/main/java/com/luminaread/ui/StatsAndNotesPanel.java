@@ -15,7 +15,6 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -32,10 +31,8 @@ public class StatsAndNotesPanel extends JPanel {
     private final BiConsumer<String, ReadingPosition> onJumpToBookPosition;
 
     private final JPanel metricsGrid;
-    private final JPanel bookmarksListPanel;
-    private final JPanel highlightsListPanel;
-    private final JScrollPane bmScroll;
-    private final JScrollPane hlScroll;
+    private final NotesPages<Bookmark> bookmarkPages;
+    private final NotesPages<Highlight> highlightPages;
     private ThemePalette currentTheme;
 
     public StatsAndNotesPanel(LibraryStorageService storageService,
@@ -67,25 +64,14 @@ public class StatsAndNotesPanel extends JPanel {
         topContainer.add(metricsGrid, BorderLayout.CENTER);
         add(topContainer, BorderLayout.NORTH);
 
-        bookmarksListPanel = new JPanel();
-        bookmarksListPanel.setLayout(new BoxLayout(bookmarksListPanel, BoxLayout.Y_AXIS));
-        bookmarksListPanel.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
-        bmScroll = SmoothScrollUtil.enhanceAndReturn(new JScrollPane(bookmarksListPanel));
-        bmScroll.setBorder(BorderFactory.createTitledBorder("Закладки в книгах"));
-
-        highlightsListPanel = new JPanel();
-        highlightsListPanel.setLayout(new BoxLayout(highlightsListPanel, BoxLayout.Y_AXIS));
-        highlightsListPanel.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
-        hlScroll = SmoothScrollUtil.enhanceAndReturn(new JScrollPane(highlightsListPanel));
-        hlScroll.setBorder(BorderFactory.createTitledBorder("Выделенные цитаты и заметки"));
-
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, bmScroll, hlScroll);
+        bookmarkPages = new NotesPages<>("Закладки в книгах", "Пока нет сохранённых закладок.", this::createBookmarkRow);
+        highlightPages = new NotesPages<>("Цитаты и заметки", "Пока нет сохранённых цитат и заметок.", this::createHighlightRow);
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, bookmarkPages, highlightPages);
         splitPane.setResizeWeight(0.45);
         splitPane.setBorder(BorderFactory.createEmptyBorder(0, 22, 20, 22));
         add(splitPane, BorderLayout.CENTER);
 
         applyTheme(currentTheme);
-        refreshData();
     }
 
     public void refreshData() {
@@ -108,37 +94,12 @@ public class StatsAndNotesPanel extends JPanel {
         metricsGrid.add(createMetricCard("Время за чтением", String.format("%.1f ч", hours), (totalSeconds / 60) + " мин. всего"));
         metricsGrid.add(createMetricCard("Прочитано слов", String.format("%,d", approxWordsRead), String.format("Из %,d в библиотеке", totalWordsInLib)));
         metricsGrid.add(createMetricCard("Средняя скорость", wpm + " сл/мин", "Расчетный темп чтения"));
-        metricsGrid.add(createMetricCard("Закладки и цитаты",
-                storageService.getBookmarks(null).size() + " / " + storageService.getHighlights(null).size(),
-                "Закладок / Цитат"));
-
-        bookmarksListPanel.removeAll();
         List<Bookmark> bookmarks = storageService.getBookmarks(null);
-        if (bookmarks.isEmpty()) {
-            JLabel empty = new JLabel("Пока нет сохраненных закладок.");
-            empty.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
-            empty.setForeground(currentTheme.getTextSecondary());
-            bookmarksListPanel.add(empty);
-        } else {
-            for (Bookmark bm : bookmarks) {
-                bookmarksListPanel.add(createBookmarkRow(bm));
-                bookmarksListPanel.add(Box.createVerticalStrut(8));
-            }
-        }
-
-        highlightsListPanel.removeAll();
         List<Highlight> highlights = storageService.getHighlights(null);
-        if (highlights.isEmpty()) {
-            JLabel empty = new JLabel("Пока нет сохраненных цитат и заметок.");
-            empty.setFont(ModernUiFactory.uiFont(Font.PLAIN, 13));
-            empty.setForeground(currentTheme.getTextSecondary());
-            highlightsListPanel.add(empty);
-        } else {
-            for (Highlight hl : highlights) {
-                highlightsListPanel.add(createHighlightRow(hl));
-                highlightsListPanel.add(Box.createVerticalStrut(8));
-            }
-        }
+        metricsGrid.add(createMetricCard("Закладки и цитаты", bookmarks.size() + " / " + highlights.size(),
+                "Закладок / Цитат"));
+        bookmarkPages.refresh(bookmarks);
+        highlightPages.refresh(highlights);
 
         revalidate();
         repaint();
@@ -275,10 +236,8 @@ public class StatsAndNotesPanel extends JPanel {
     public void applyTheme(ThemePalette theme) {
         this.currentTheme = theme;
         setBackground(theme.getBackground());
-        bookmarksListPanel.setBackground(theme.getBackground());
-        highlightsListPanel.setBackground(theme.getBackground());
-        bmScroll.getViewport().setBackground(theme.getBackground());
-        hlScroll.getViewport().setBackground(theme.getBackground());
+        bookmarkPages.applyTheme(theme);
+        highlightPages.applyTheme(theme);
         refreshData();
     }
 }

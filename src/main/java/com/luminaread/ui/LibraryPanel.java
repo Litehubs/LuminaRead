@@ -37,7 +37,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -45,6 +44,9 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 public class LibraryPanel extends JPanel {
+    static final FileNameExtensionFilter BOOK_FILES = new FileNameExtensionFilter(
+            "Книги и документы", "fb2", "fbz", "zip", "epub", "pdf", "txt", "md", "markdown", "html", "htm", "rtf", "cbz"
+    );
     private final LibraryStorageService storageService;
     private final Consumer<Book> onOpenBook;
     private final Runnable onNavigateToOnlineCatalog;
@@ -422,10 +424,7 @@ public class LibraryPanel extends JPanel {
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("Выберите книги или документы для добавления в LuminaRead");
         chooser.setMultiSelectionEnabled(true);
-        chooser.setFileFilter(new FileNameExtensionFilter(
-                "Все форматы книг (FB2, FB2.ZIP, EPUB, PDF, TXT, MD, HTML, RTF, CBZ)",
-                "fb2", "zip", "epub", "pdf", "txt", "md", "markdown", "html", "htm", "rtf", "cbz"
-        ));
+        chooser.setFileFilter(BOOK_FILES);
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             importFiles(chooser.getSelectedFiles(), true);
         }
@@ -555,16 +554,11 @@ public class LibraryPanel extends JPanel {
         }
     }
 
-    private static List<File> booksIn(Path folder) throws java.io.IOException {
+    static List<File> booksIn(Path folder) throws java.io.IOException {
         try (Stream<Path> paths = Files.walk(folder, 3)) {
             return paths.filter(Files::isRegularFile)
-                    .filter(path -> {
-                        String n = path.getFileName().toString().toLowerCase(Locale.ROOT);
-                        return n.endsWith(".fb2") || n.endsWith(".fb2.zip") || n.endsWith(".epub")
-                                || n.endsWith(".txt") || n.endsWith(".md") || n.endsWith(".pdf")
-                                || n.endsWith(".html") || n.endsWith(".cbz");
-                    })
                     .map(Path::toFile)
+                    .filter(BOOK_FILES::accept)
                     .toList();
         }
     }

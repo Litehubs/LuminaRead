@@ -392,8 +392,7 @@ public class LibraryStorageService {
         String oldFormat = book.getFormat();
         int oldWords = book.getTotalWords();
         byte[] oldCover = book.getCoverImage();
-        byte[] cover = parsed.getCoverImage() != null && (replaceCover || oldCover == null)
-                ? parsed.getCoverImage() : oldCover;
+        byte[] cover = replaceCover || oldCover == null ? parsed.getCoverImage() : oldCover;
         int words = parsed.getTotalWords();
         if (format.equals(oldFormat) && words == oldWords && java.util.Arrays.equals(cover, oldCover)) return;
         book.setFormat(format);
