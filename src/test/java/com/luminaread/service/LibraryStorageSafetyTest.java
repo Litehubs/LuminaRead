@@ -17,6 +17,29 @@ import static org.junit.jupiter.api.Assertions.*;
 class LibraryStorageSafetyTest {
     @TempDir Path home;
 
+    @Test void reimportRefreshesMetadataWithoutChangingReadingState() throws Exception {
+        var library = new LibraryStorageService(home);
+        Path file = home.resolve("metadata.txt");
+        Files.writeString(file, "Название: Old title\nАвтор: Alice\n\nSame paragraph.");
+        var book = library.importBookFile(file.toFile(), false);
+        assertEquals("Old title", book.getTitle());
+        book.setCurrentPageInChapter(7);
+        library.toggleFavorite(book.getId());
+        var bookmark = new com.luminaread.model.Bookmark(book.getId(), book.getTitle(), 0, "", 7, 0, "", "");
+        library.addBookmark(bookmark);
+
+        Files.writeString(file, "Название: New title\nАвтор: Robert\n\nSame paragraph.");
+        var refreshed = library.importBookFile(file.toFile(), false);
+        assertEquals(book.getId(), refreshed.getId());
+        assertEquals("New title", refreshed.getTitle());
+        assertEquals("Robert", refreshed.getAuthor());
+        assertTrue(refreshed.isFavorite());
+        assertEquals(7, refreshed.getCurrentPageInChapter());
+        var reopened = new LibraryStorageService(home);
+        assertEquals("New title", reopened.getAllBooks().get(0).getTitle());
+        assertEquals(bookmark.getId(), reopened.getBookmarks(book.getId()).get(0).getId());
+    }
+
     @Test void openingChecksTheSourceBeforeReusingParsedText() throws Exception {
         var storage = new LibraryStorageService(home);
         Path original = Files.writeString(home.resolve("chapter.txt"), "Alpha in the original source.");
