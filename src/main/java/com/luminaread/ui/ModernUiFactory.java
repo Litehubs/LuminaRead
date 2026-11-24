@@ -1,6 +1,7 @@
 package com.luminaread.ui;
 
 import com.luminaread.model.Book;
+import com.luminaread.util.WeightedCache;
 
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
@@ -19,15 +20,14 @@ import java.awt.FontMetrics;
 import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.GraphicsEnvironment;
-import java.awt.Image;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.lang.ref.WeakReference;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Locale;
-import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class ModernUiFactory {
     static JLabel plainTextLabel(String text) {
@@ -50,7 +50,18 @@ public final class ModernUiFactory {
         });
     }
 
-    private static final Map<String, ImageIcon> COVER_CACHE = new ConcurrentHashMap<>();
+    private static final WeightedCache<CoverSize, Cover> COVER_CACHE = new WeightedCache<>(256, 8L * 1024 * 1024);
+
+    private static final byte[] NO_COVER = new byte[0];
+
+    private record CoverSize(String bookId, int width, int height) {}
+
+    private record Cover(WeakReference<byte[]> source, String title, String author, String format, ImageIcon icon) {
+        boolean matches(byte[] bytes, Book book) {
+            return source.refersTo(bytes) && title.equals(book.getTitle())
+                    && author.equals(book.getAuthor()) && format.equals(book.getFormat());
+        }
+    }
     private static final String UI_FONT_FAMILY = detectBestUiFontFamily();
     private static final String SERIF_FONT_FAMILY = detectBestSerifFontFamily();
 
@@ -195,23 +206,22 @@ public final class ModernUiFactory {
     }
 
     public static ImageIcon getOrCreateBookCoverIcon(Book book, int width, int height) {
-        String cacheKey = book.getId() + "_" + width + "x" + height;
-        ImageIcon cached = COVER_CACHE.get(cacheKey);
-        if (cached != null) {
-            return cached;
-        }
+        var key = new CoverSize(book.getId(), width, height);
+        byte[] source = Objects.requireNonNullElse(book.getCoverImage(), NO_COVER);
+        Cover cached = COVER_CACHE.get(key);
+        if (cached != null && cached.matches(source, book)) return cached.icon();
 
         BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2 = img.createGraphics();
         enableHighQualityRendering(g2);
 
         boolean renderedEmbedded = false;
-        if (book.getCoverImage() != null && book.getCoverImage().length > 0) {
+        if (source.length > 0) {
             try {
-                BufferedImage rawCover = BookCoverDecoder.decode(book.getCoverImage());
+                BufferedImage rawCover = BookCoverDecoder.decode(source);
                 if (rawCover != null) {
-                    Image scaled = rawCover.getScaledInstance(width, height, Image.SCALE_SMOOTH);
-                    g2.drawImage(scaled, 0, 0, null);
+                    g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                    g2.drawImage(rawCover, 0, 0, width, height, null);
                     renderedEmbedded = true;
                 }
             } catch (Exception ex) {
@@ -229,7 +239,8 @@ public final class ModernUiFactory {
         g2.dispose();
 
         ImageIcon icon = new ImageIcon(img);
-        COVER_CACHE.put(cacheKey, icon);
+        COVER_CACHE.put(key, new Cover(new WeakReference<>(source), book.getTitle(), book.getAuthor(),
+                book.getFormat(), icon), (long) width * height * Integer.BYTES);
         return icon;
     }
 
