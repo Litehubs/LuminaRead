@@ -26,7 +26,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutionException;
@@ -153,50 +159,77 @@ public class OnlineCatalogService implements IOnlineCatalogService {
     }
 
     public SearchResult searchBooksDetailed(String query, String sourceFilter, String languageFilter) {
+        return searchBooksDetailed(query, sourceFilter, languageFilter, partial -> {});
+    }
+
+    public SearchResult searchBooksDetailed(String query, String sourceFilter, String languageFilter,
+                                            Consumer<SearchResult> onPartial) {
         String cleanQuery = query == null ? "" : query.trim();
-        Map<String, CompletableFuture<List<OnlineBookItem>>> tasks = new LinkedHashMap<>();
+        Map<String, Callable<List<OnlineBookItem>>> tasks = new LinkedHashMap<>();
         boolean searchAll = "ALL".equalsIgnoreCase(sourceFilter);
 
         if (searchAll || "FLIBUSTA".equalsIgnoreCase(sourceFilter)) {
-            tasks.put("Флибуста", CompletableFuture.supplyAsync(() -> searchFlibustaOpds(cleanQuery)));
+            tasks.put("Флибуста", () -> searchFlibustaOpds(cleanQuery));
         }
         if (searchAll || "LIBRUSEC".equalsIgnoreCase(sourceFilter)) {
-            tasks.put("Либрусек", CompletableFuture.supplyAsync(() -> searchLibrusecOpds(cleanQuery)));
+            tasks.put("Либрусек", () -> searchLibrusecOpds(cleanQuery));
         }
         if (searchAll || "GUTENBERG".equalsIgnoreCase(sourceFilter)) {
-            tasks.put("Project Gutenberg", CompletableFuture.supplyAsync(() -> searchGutendex(cleanQuery, languageFilter)));
+            tasks.put("Project Gutenberg", () -> searchGutendex(cleanQuery, languageFilter));
         }
         if (searchAll || "OPENLIBRARY".equalsIgnoreCase(sourceFilter)) {
-            tasks.put("Open Library", CompletableFuture.supplyAsync(() -> searchOpenLibrary(cleanQuery)));
+            tasks.put("Open Library", () -> searchOpenLibrary(cleanQuery));
         }
-        if ("STANDARD_EBOOKS".equalsIgnoreCase(sourceFilter)) {
-            tasks.put("Standard Ebooks", CompletableFuture.supplyAsync(() ->
-                    fetchOpdsFeed("https://standardebooks.org/opds/all?query=" + encodeUrl(cleanQuery), "Standard Ebooks")));
+        if (searchAll || "STANDARD_EBOOKS".equalsIgnoreCase(sourceFilter)) {
+            tasks.put("Standard Ebooks", () ->
+                    fetchOpdsFeed("https://standardebooks.org/opds/all?query=" + encodeUrl(cleanQuery), "Standard Ebooks"));
         }
 
-        return collectSearchResults(tasks);
+        return collectSearchResults(tasks, Duration.ofSeconds(16), onPartial);
     }
 
-    static SearchResult collectSearchResults(Map<String, CompletableFuture<List<OnlineBookItem>>> tasks) {
-        List<OnlineBookItem> books = new ArrayList<>();
-        List<String> unavailable = new ArrayList<>();
+    static SearchResult collectSearchResults(Map<String, Callable<List<OnlineBookItem>>> tasks,
+                                             Duration budget, Consumer<SearchResult> onPartial) {
+        if (tasks.isEmpty()) return new SearchResult(List.of(), List.of());
+
+        var workers = Executors.newFixedThreadPool(tasks.size(), task -> {
+            var thread = new Thread(task, "LuminaRead-Catalog");
+            thread.setDaemon(true);
+            return thread;
+        });
+        var completed = new ExecutorCompletionService<List<OnlineBookItem>>(workers);
+        var pending = new LinkedHashMap<Future<List<OnlineBookItem>>, String>();
+        var books = new ArrayList<OnlineBookItem>();
+        var unavailable = new ArrayList<String>();
         var totalFailure = new IllegalStateException("Не удалось выполнить поиск в выбранных каталогах");
-        for (var source : tasks.entrySet()) {
-            try {
-                books.addAll(source.getValue().get());
-            } catch (InterruptedException ex) {
-                tasks.values().forEach(task -> task.cancel(false));
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Поиск в каталогах отменён", ex);
-            } catch (ExecutionException ex) {
-                Throwable cause = ex.getCause();
-                LOG.log(Level.WARNING, "Не удалось выполнить поиск в каталоге " + source.getKey(), cause);
-                unavailable.add(source.getKey());
-                totalFailure.addSuppressed(cause);
+        long end = System.nanoTime() + budget.toNanos();
+        try {
+            tasks.forEach((source, query) -> pending.put(completed.submit(query), source));
+            while (!pending.isEmpty()) {
+                var job = completed.poll(Math.max(0, end - System.nanoTime()), TimeUnit.NANOSECONDS);
+                if (job == null) {
+                    unavailable.addAll(pending.values());
+                    totalFailure.addSuppressed(new TimeoutException("Истекло время поиска в каталогах"));
+                    break;
+                }
+                String source = pending.remove(job);
+                try {
+                    if (books.addAll(job.get())) onPartial.accept(new SearchResult(books, unavailable));
+                } catch (ExecutionException ex) {
+                    LOG.log(Level.FINE, "Не удалось выполнить поиск в каталоге " + source, ex.getCause());
+                    unavailable.add(source);
+                    totalFailure.addSuppressed(ex.getCause());
+                }
             }
+            if (unavailable.size() == tasks.size()) throw totalFailure;
+            return new SearchResult(books, unavailable);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Поиск в каталогах отменён", ex);
+        } finally {
+            pending.keySet().forEach(job -> job.cancel(true));
+            workers.shutdownNow();
         }
-        if (!tasks.isEmpty() && unavailable.size() == tasks.size()) throw totalFailure;
-        return new SearchResult(books, unavailable);
     }
 
     @Override
