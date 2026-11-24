@@ -351,11 +351,8 @@ public class LibraryStorageService {
 
             Book book = new Book(parsed.getTitle(), parsed.getAuthor(), absPath, format);
             ensureNonEmptyChapters(book, targetFile, parsed);
-            book.setDescription(parsed.getDescription());
-            book.setSeries(parsed.getSeries());
-            book.setLanguage(parsed.getLanguage());
+            Metadata.from(parsed, format).apply(book);
             book.setCoverImage(parsed.getCoverImage());
-            book.setTotalWords(parsed.getTotalWords());
 
             changeList(state.books, () -> state.books.add(0, book));
             bookIds.add(book.getId());
@@ -389,22 +386,47 @@ public class LibraryStorageService {
     }
 
     private void updateMetadata(Book book, String format, BookContent parsed, boolean replaceCover) {
-        String oldFormat = book.getFormat();
-        int oldWords = book.getTotalWords();
+        Metadata old = Metadata.from(book);
+        Metadata next = Metadata.from(parsed, format);
         byte[] oldCover = book.getCoverImage();
         byte[] cover = replaceCover || oldCover == null ? parsed.getCoverImage() : oldCover;
-        int words = parsed.getTotalWords();
-        if (format.equals(oldFormat) && words == oldWords && java.util.Arrays.equals(cover, oldCover)) return;
-        book.setFormat(format);
-        book.setTotalWords(words);
+        if (old.equals(next) && java.util.Arrays.equals(cover, oldCover)) return;
+        next.apply(book);
         book.setCoverImage(cover);
         try {
             saveState();
         } catch (UncheckedIOException | SecurityException ex) {
-            book.setFormat(oldFormat);
-            book.setTotalWords(oldWords);
+            old.apply(book);
             book.setCoverImage(oldCover);
             throw ex;
+        }
+    }
+
+    private record Metadata(String title, String author, String series, String language, String description,
+                            String format, int words) {
+        static Metadata from(Book book) {
+            return new Metadata(book.getTitle(), book.getAuthor(), book.getSeries(), book.getLanguage(),
+                    book.getDescription(), book.getFormat(), book.getTotalWords());
+        }
+
+        static Metadata from(BookContent content, String format) {
+            return new Metadata(text(content.getTitle(), "Без названия"), text(content.getAuthor(), "Неизвестный автор"),
+                    text(content.getSeries(), ""), content.getLanguage() == null ? "ru" : content.getLanguage().trim(),
+                    text(content.getDescription(), ""), format, content.getTotalWords());
+        }
+
+        private static String text(String text, String fallback) {
+            return text == null || text.isBlank() ? fallback : text.trim();
+        }
+
+        void apply(Book book) {
+            book.setTitle(title);
+            book.setAuthor(author);
+            book.setSeries(series);
+            book.setLanguage(language);
+            book.setDescription(description);
+            book.setFormat(format);
+            book.setTotalWords(words);
         }
     }
 
