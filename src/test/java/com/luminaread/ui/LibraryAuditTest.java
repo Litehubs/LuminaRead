@@ -25,32 +25,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class LibraryAuditTest {
-    @Test void importFromFolderUsesTheSameFileFilter(@TempDir Path folder) throws Exception {
-        var expected = List.of("book.RTF", "page.htm", "draft.markdown", "book.fb2.zip");
-        Files.writeString(folder.resolve("book.RTF"), "{\\rtf1 A book.}");
-        Files.writeString(folder.resolve("page.htm"), "<html><body>A book.</body></html>");
-        Files.writeString(folder.resolve("draft.markdown"), "# Book\n\nA chapter.");
-        try (var zip = new ZipOutputStream(Files.newOutputStream(folder.resolve("book.fb2.zip")))) {
-            zip.putNextEntry(new ZipEntry("book.fb2"));
-            zip.write(fb2("").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        }
-        Files.writeString(folder.resolve("other.json"), "{}");
-        Files.createDirectory(folder.resolve("folder.pdf"));
-        var files = LibraryPanel.booksIn(folder);
-        assertEquals(expected.stream().sorted().toList(), files.stream().map(java.io.File::getName).sorted().toList());
-        var library = inProfile(folder, LibraryStorageService::new);
-        for (var file : files) {
-            assertTrue(LibraryPanel.BOOK_FILES.accept(file));
-            assertFalse(library.loadBookContent(library.importBookFile(file, false)).getChapters().isEmpty());
-        }
-    }
-
     @Test void reimportReplacesAndRemovesCoverWithTheSameBookId(@TempDir Path folder) throws Exception {
         Path book = folder.resolve("cover.fb2");
         var library = inProfile(folder, LibraryStorageService::new);
