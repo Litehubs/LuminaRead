@@ -78,6 +78,41 @@ class MotionSurfaceTest {
         });
     }
 
+    @Test
+    void aRapidReplacementShowsTheLatestViewWithoutTakingAnotherSnapshot() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            class Surface extends MotionSurface {
+                int snapshots;
+
+                @Override public void printAll(java.awt.Graphics graphics) {
+                    snapshots++;
+                    super.printAll(graphics);
+                }
+            }
+            var surface = new Surface();
+            surface.setBackground(Color.RED);
+            surface.setSize(64, 64);
+            surface.addNotify();
+            try {
+                surface.setAnimationsEnabled(true);
+                surface.change(MotionSurface.Effect.OPEN, 1, () -> surface.setBackground(Color.GREEN));
+                assertEquals(1, surface.snapshots);
+                surface.change(MotionSurface.Effect.CLOSE, -1, () -> surface.setBackground(Color.BLUE));
+                assertEquals(1, surface.snapshots);
+                assertEquals(Color.BLUE.getRGB(), paintLive(surface));
+
+                surface.change(MotionSurface.Effect.OPEN, 1, () -> surface.setBackground(Color.GREEN));
+                assertEquals(2, surface.snapshots);
+                surface.setAnimationsEnabled(false);
+                surface.change(MotionSurface.Effect.CLOSE, -1, () -> surface.setBackground(Color.BLUE));
+                assertEquals(2, surface.snapshots);
+                assertEquals(Color.BLUE.getRGB(), paintLive(surface));
+            } finally {
+                surface.removeNotify();
+            }
+        });
+    }
+
     private static BufferedImage frameAt(MotionSurface.Effect effect, int direction, double progress) {
         var image = new BufferedImage(64, 64, BufferedImage.TYPE_INT_RGB);
         var graphics = image.createGraphics();
