@@ -23,6 +23,7 @@ import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -75,6 +76,7 @@ public class LibraryStorageService {
     private final Path dataDir;
     private final Path booksDir;
     private final Path stateFile;
+    private final long stateLimit;
     private final BookCopies copies;
     private final SettingsJsonRepository settingsJsonRepository = new SettingsJsonRepository();
     private final ProgressStore progress;
@@ -138,6 +140,11 @@ public class LibraryStorageService {
     }
 
     LibraryStorageService(Path home) {
+        this(home, MAX_STATE_BYTES);
+    }
+
+    LibraryStorageService(Path home, long stateLimit) {
+        this.stateLimit = stateLimit;
         this.dataDir = home.resolve(".luminaread");
         this.booksDir = home.resolve("LuminaRead_Books");
         this.stateFile = dataDir.resolve("library_state.bin");
@@ -160,13 +167,8 @@ public class LibraryStorageService {
 
     private void loadState() {
         if (Files.exists(stateFile)) {
-            try (var input = new BufferedInputStream(Files.newInputStream(stateFile), 32768);
-                 var ois = new ObjectInputStream(input)) {
-                if (Files.size(stateFile) > MAX_STATE_BYTES) throw new IOException("Файл библиотеки слишком большой");
-                ObjectInputFilter filter = LibraryStorageService::filterState;
-                ObjectInputFilter existing = ois.getObjectInputFilter();
-                ois.setObjectInputFilter(existing == null ? filter : ObjectInputFilter.merge(filter, existing));
-                Object obj = ois.readObject();
+            try {
+                Object obj = readState();
                 if (obj instanceof PersistentState loaded) {
                     this.state = loaded;
                     if (this.state.settings == null) {
@@ -190,6 +192,18 @@ public class LibraryStorageService {
         Path jsonSettingsFile = dataDir.resolve("settings.json");
         if (Files.exists(jsonSettingsFile)) {
             loadLegacySettings(jsonSettingsFile);
+        }
+    }
+
+    private Object readState() throws IOException, ClassNotFoundException {
+        try (var file = Files.newByteChannel(stateFile)) {
+            if (file.size() > stateLimit) throw new IOException("Файл библиотеки слишком большой");
+            try (var input = new ObjectInputStream(new BufferedInputStream(Channels.newInputStream(file), 32768))) {
+                ObjectInputFilter filter = LibraryStorageService::filterState;
+                ObjectInputFilter existing = input.getObjectInputFilter();
+                input.setObjectInputFilter(existing == null ? filter : ObjectInputFilter.merge(filter, existing));
+                return input.readObject();
+            }
         }
     }
 
@@ -223,15 +237,20 @@ public class LibraryStorageService {
     }
 
     public synchronized void saveState() {
+        boolean previous = state.settingsEmbeddedAuthoritative;
+        boolean saved = false;
+        state.settingsEmbeddedAuthoritative = true;
         try {
-            state.settingsEmbeddedAuthoritative = true;
-            AtomicFile.write(stateFile, output -> {
+            AtomicFile.write(stateFile, stateLimit, output -> {
                 ObjectOutputStream oos = new ObjectOutputStream(new BufferedOutputStream(output, 32768));
                 oos.writeObject(state);
                 oos.flush();
             });
+            saved = true;
         } catch (IOException ex) {
             throw new UncheckedIOException("Не удалось сохранить библиотеку: " + stateFile, ex);
+        } finally {
+            if (!saved) state.settingsEmbeddedAuthoritative = previous;
         }
         // The library is committed. The JSON copy serves export and legacy readers.
         try {

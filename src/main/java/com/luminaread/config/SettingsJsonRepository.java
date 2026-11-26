@@ -19,6 +19,8 @@ import java.util.Map;
  * (ReaderDisplayConfig and OpdsCatalogConfig) instead of fragile Java serialization.
  */
 public class SettingsJsonRepository {
+    private static final int MAX_STATE_BYTES = 1024 * 1024;
+
 
     private final Path filePath;
 
@@ -91,7 +93,7 @@ public class SettingsJsonRepository {
 
             sb.append("}\n");
             byte[] content = sb.toString().getBytes(StandardCharsets.UTF_8);
-            AtomicFile.write(targetPath, output -> output.write(content));
+            AtomicFile.write(targetPath, MAX_STATE_BYTES, output -> output.write(content));
         } catch (IOException ex) {
             throw new UncheckedIOException("Не удалось сохранить настройки: " + targetPath, ex);
         }
@@ -104,7 +106,7 @@ public class SettingsJsonRepository {
     public synchronized boolean load(ReaderDisplayConfig display, OpdsCatalogConfig opds, Path sourcePath) {
         if (!Files.exists(sourcePath)) return false;
         try {
-            String text = new String(BoundedInput.read(sourcePath, 1024 * 1024), StandardCharsets.UTF_8);
+            String text = new String(BoundedInput.read(sourcePath, MAX_STATE_BYTES), StandardCharsets.UTF_8);
             Object parsed = Json.parse(text);
             if (!(parsed instanceof Map<?, ?> root)) throw new IllegalArgumentException("Ожидался объект настроек");
             verifySection(root, "display");

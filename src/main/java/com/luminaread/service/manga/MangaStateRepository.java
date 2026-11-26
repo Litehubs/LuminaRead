@@ -19,6 +19,8 @@ import java.util.Map;
  * Repository responsible for persisting and restoring manga state (favorites, history, progress, reader prefs).
  */
 public class MangaStateRepository {
+    private static final int MAX_STATE_BYTES = 32 * 1024 * 1024;
+
 
     private final Path explicitPath;
 
@@ -95,7 +97,7 @@ public class MangaStateRepository {
 
             sb.append("}");
             byte[] content = sb.toString().getBytes(StandardCharsets.UTF_8);
-            AtomicFile.write(path, output -> output.write(content));
+            AtomicFile.write(path, MAX_STATE_BYTES, output -> output.write(content));
         } catch (IOException ex) {
             throw new UncheckedIOException("Не удалось сохранить данные манги: " + getStateFilePath(), ex);
         }
@@ -108,7 +110,7 @@ public class MangaStateRepository {
         try {
             Path path = getStateFilePath();
             if (!Files.exists(path)) return;
-            String text = new String(BoundedInput.read(path, 32 * 1024 * 1024), StandardCharsets.UTF_8);
+            String text = new String(BoundedInput.read(path, MAX_STATE_BYTES), StandardCharsets.UTF_8);
             Object root = Json.parse(text);
             if (!(root instanceof Map)) throw new IllegalArgumentException("Ожидался объект JSON");
             Map<?, ?> map = (Map<?, ?>) root;

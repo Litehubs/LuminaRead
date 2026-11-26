@@ -22,6 +22,8 @@ import java.util.Objects;
  * (favorites, reading history, last read chapters, and reader preferences) on disk.
  */
 public class RanobeStateRepository {
+    private static final int MAX_STATE_BYTES = 32 * 1024 * 1024;
+
 
     @FunctionalInterface
     public interface ItemFactory<T extends RanobeItem> {
@@ -110,7 +112,7 @@ public class RanobeStateRepository {
 
             sb.append("}");
             byte[] content = sb.toString().getBytes(StandardCharsets.UTF_8);
-            AtomicFile.write(stateFile, output -> output.write(content));
+            AtomicFile.write(stateFile, MAX_STATE_BYTES, output -> output.write(content));
         } catch (IOException ex) {
             throw new UncheckedIOException("Не удалось сохранить данные ранобэ: " + getStateFilePath(), ex);
         }
@@ -131,7 +133,7 @@ public class RanobeStateRepository {
         try {
             Path stateFile = getStateFilePath();
             if (!Files.exists(stateFile)) return;
-            String text = new String(BoundedInput.read(stateFile, 32 * 1024 * 1024), StandardCharsets.UTF_8);
+            String text = new String(BoundedInput.read(stateFile, MAX_STATE_BYTES), StandardCharsets.UTF_8);
             Object root = Json.parse(text);
             if (!(root instanceof Map)) throw new IllegalArgumentException("Ожидался объект JSON");
             Map<?, ?> map = (Map<?, ?>) root;
