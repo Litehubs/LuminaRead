@@ -40,6 +40,28 @@ class LibraryStorageSafetyTest {
         assertEquals(bookmark.getId(), reopened.getBookmarks(book.getId()).get(0).getId());
     }
 
+    @Test void oversizedChangeKeepsThePreviousLibraryOnDiskAndInMemory() throws Exception {
+        long limit = 8192;
+        var library = new LibraryStorageService(home, limit);
+        Path file = Files.writeString(home.resolve("readable.txt"), "A readable chapter.");
+        var book = library.importBookFile(file.toFile(), false);
+        Path stateFile = home.resolve(".luminaread/library_state.bin");
+        byte[] previous = Files.readAllBytes(stateFile);
+        var largeNote = new com.luminaread.model.Highlight(
+                book.getId(), book.getTitle(), 0, "Chapter", "quote", "Я".repeat(8192), "#abc");
+
+        var error = assertThrows(UncheckedIOException.class, () -> library.addHighlight(largeNote));
+        assertTrue(error.getCause().getMessage().contains("допустимый размер"));
+        assertArrayEquals(previous, Files.readAllBytes(stateFile));
+        assertTrue(library.getHighlights(book.getId()).isEmpty());
+        var reopened = new LibraryStorageService(home, limit);
+        assertEquals(book.getId(), reopened.getAllBooks().get(0).getId());
+        assertTrue(reopened.getHighlights(book.getId()).isEmpty());
+        try (var entries = Files.list(stateFile.getParent())) {
+            assertFalse(entries.anyMatch(path -> path.getFileName().toString().endsWith(".tmp")));
+        }
+    }
+
     @Test void openingChecksTheSourceBeforeReusingParsedText() throws Exception {
         var storage = new LibraryStorageService(home);
         Path original = Files.writeString(home.resolve("chapter.txt"), "Alpha in the original source.");
