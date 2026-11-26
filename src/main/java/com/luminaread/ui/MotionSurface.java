@@ -35,7 +35,16 @@ class MotionSurface extends JPanel {
     private record Frame(BufferedImage image, int width, int height, Effect effect, int direction, long startedAt) {}
 
     void change(Effect effect, int direction, Runnable update) {
+        boolean replacing = frame != null && sameSize(frame.width(), frame.height())
+                && elapsed() < frame.effect().durationNanos;
         cancelTransition();
+        if (replacing) {
+            // Keep rapid navigation immediate and skip another synchronous printAll.
+            long started = TRACE ? System.nanoTime() : 0;
+            update.run();
+            if (TRACE) logTiming("transition", effect, started);
+            return;
+        }
         int width = getWidth();
         int height = getHeight();
         if (!animationsEnabled || !isShowing() || width <= 0 || height <= 0) {
@@ -121,7 +130,12 @@ class MotionSurface extends JPanel {
         double progress = time * time * (3 - 2 * time);
         Graphics2D overlay = (Graphics2D) graphics.create();
         try {
-            overlay.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            var transform = overlay.getTransform();
+            // Resampling the outgoing image on every HiDPI frame is expensive.
+            boolean highDpi = transform.getScaleX() >= 2 || transform.getScaleY() >= 2;
+            overlay.setRenderingHint(RenderingHints.KEY_INTERPOLATION, highDpi
+                    ? RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+                    : RenderingHints.VALUE_INTERPOLATION_BILINEAR);
             paintFrame(overlay, frame.effect(), frame.image(), frame.width(), frame.height(), frame.direction(), progress);
         } finally {
             overlay.dispose();
