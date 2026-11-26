@@ -8,8 +8,6 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
-import javax.swing.JDialog;
-import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -17,36 +15,20 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
 import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
-import javax.swing.SwingWorker;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
-import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.Dialog;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
-import java.awt.Window;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
 import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
-import java.util.ArrayList;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 public class LibraryPanel extends JPanel {
-    static final FileNameExtensionFilter BOOK_FILES = new FileNameExtensionFilter(
-            "Книги и документы", "fb2", "fbz", "zip", "epub", "pdf", "txt", "md", "markdown", "html", "htm", "rtf", "cbz"
-    );
+    private final BookImportDialog bookImport;
     private final LibraryStorageService storageService;
     private final Consumer<Book> onOpenBook;
     private final Runnable onNavigateToOnlineCatalog;
@@ -74,6 +56,7 @@ public class LibraryPanel extends JPanel {
                         Runnable onNavigateToOnlineCatalog) {
         this.storageService = storageService;
         this.onOpenBook = onOpenBook;
+        this.bookImport = new BookImportDialog(this, storageService, this::refreshBooksGrid, onOpenBook);
         this.onNavigateToOnlineCatalog = onNavigateToOnlineCatalog;
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());
 
@@ -89,7 +72,7 @@ public class LibraryPanel extends JPanel {
         addFileBtn.addActionListener(e -> promptImportFiles());
 
         JButton importFolderBtn = ModernUiFactory.createFlatButton("Импорт папки", currentTheme);
-        importFolderBtn.addActionListener(e -> promptImportFolder());
+        importFolderBtn.addActionListener(e -> bookImport.chooseFolder());
 
         JButton onlineBtn = ModernUiFactory.createFlatButton("Скачать книги онлайн", currentTheme);
         onlineBtn.addActionListener(e -> onNavigateToOnlineCatalog.run());
@@ -421,146 +404,15 @@ public class LibraryPanel extends JPanel {
     }
 
     public void promptImportFiles() {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Выберите книги или документы для добавления в LuminaRead");
-        chooser.setMultiSelectionEnabled(true);
-        chooser.setFileFilter(BOOK_FILES);
-        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            importFiles(chooser.getSelectedFiles(), true);
-        }
+        bookImport.chooseFiles();
     }
 
     public void importFiles(File[] files) {
-        importFiles(files, true);
+        bookImport.importFiles(files);
     }
-
-    private void importFiles(File[] files, boolean copyToLibrary) {
-        if (files == null || files.length == 0) return;
-        var selected = List.of(files);
-        runImport(() -> selected, copyToLibrary, true);
-    }
-
-    private JDialog importDialog;
 
     boolean focusImport() {
-        if (importDialog == null) return false;
-        importDialog.toFront();
-        return true;
-    }
-
-    private void runImport(Callable<List<File>> findFiles, boolean copyToLibrary, boolean openSingle) {
-        if (focusImport()) return;
-
-        JDialog dialog = new JDialog((Window) SwingUtilities.getWindowAncestor(this),
-                "Импорт книг", Dialog.ModalityType.MODELESS);
-        importDialog = dialog;
-        dialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
-        JPanel panel = new JPanel(new BorderLayout(10, 10));
-        panel.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
-        JLabel status = ModernUiFactory.plainTextLabel("Подготовка импорта…");
-        status.setPreferredSize(new Dimension(360, status.getPreferredSize().height));
-        JProgressBar bar = new JProgressBar();
-        bar.setStringPainted(true);
-        bar.setIndeterminate(true);
-        JButton stop = new JButton("Остановить импорт");
-        AtomicBoolean stopRequested = new AtomicBoolean();
-        Runnable requestStop = () -> {
-            stopRequested.set(true);
-            stop.setEnabled(false);
-            status.setText("Остановка после текущего файла…");
-        };
-        stop.addActionListener(event -> requestStop.run());
-        dialog.addWindowListener(new WindowAdapter() {
-            @Override public void windowClosing(WindowEvent event) { requestStop.run(); }
-        });
-        panel.add(status, BorderLayout.NORTH);
-        panel.add(bar, BorderLayout.CENTER);
-        panel.add(stop, BorderLayout.SOUTH);
-        dialog.setContentPane(panel);
-        dialog.pack();
-        dialog.setLocationRelativeTo(this);
-
-        new SwingWorker<ImportResult, ImportProgress>() {
-            @Override protected ImportResult doInBackground() throws Exception {
-                List<File> files = findFiles.call();
-                List<Book> imported = new ArrayList<>();
-                List<String> errors = new ArrayList<>();
-                int processed = 0;
-                for (File file : files) {
-                    if (stopRequested.get()) break;
-                    publish(new ImportProgress(processed, files.size(), file.getName()));
-                    try {
-                        imported.add(storageService.importBookFile(file, copyToLibrary));
-                    } catch (Exception ex) {
-                        errors.add(file.getName() + ": " + ex.getMessage());
-                    }
-                    processed++;
-                }
-                return new ImportResult(imported, errors, processed < files.size(), files.size());
-            }
-
-            @Override protected void process(List<ImportProgress> updates) {
-                if (stopRequested.get()) return;
-                ImportProgress latest = updates.get(updates.size() - 1);
-                status.setText("Файл " + (latest.index() + 1) + " из " + latest.total() + ": " + latest.name());
-                bar.setIndeterminate(false);
-                bar.setMaximum(latest.total());
-                bar.setValue(latest.index());
-                bar.setString(latest.index() + " / " + latest.total());
-            }
-
-            @Override protected void done() {
-                importDialog = null;
-                dialog.dispose();
-                try {
-                    ImportResult result = get();
-                    refreshBooksGrid();
-                    if (openSingle && result.total() == 1 && !result.imported().isEmpty()) {
-                        onOpenBook.accept(result.imported().get(0));
-                    }
-                    if (!result.errors().isEmpty()) {
-                        String errors = String.join("\n", result.errors().stream().limit(10).toList());
-                        int extra = result.errors().size() - 10;
-                        if (extra > 0) errors += "\nЕщё ошибок: " + extra;
-                        JOptionPane.showMessageDialog(LibraryPanel.this,
-                                "Не удалось импортировать некоторые файлы:\n\n" + errors,
-                                "Результат импорта", JOptionPane.WARNING_MESSAGE);
-                    } else if (result.stopped() || !copyToLibrary) {
-                        String title = result.stopped() ? "Импорт остановлен" : "Импорт завершён";
-                        JOptionPane.showMessageDialog(LibraryPanel.this,
-                                "Импортировано книг: " + result.imported().size(), title, JOptionPane.INFORMATION_MESSAGE);
-                    }
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                } catch (ExecutionException ex) {
-                    UiPersistenceErrors.show(LibraryPanel.this, "Не удалось импортировать книги.", ex.getCause());
-                }
-            }
-        }.execute();
-        dialog.setVisible(true);
-    }
-
-    private record ImportProgress(int index, int total, String name) {}
-    private record ImportResult(List<Book> imported, List<String> errors, boolean stopped, int total) {}
-
-    private void promptImportFolder() {
-        if (focusImport()) return;
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Выберите папку с книгами для автоматического импорта");
-        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            Path folder = chooser.getSelectedFile().toPath();
-            runImport(() -> booksIn(folder), false, false);
-        }
-    }
-
-    static List<File> booksIn(Path folder) throws java.io.IOException {
-        try (Stream<Path> paths = Files.walk(folder, 3)) {
-            return paths.filter(Files::isRegularFile)
-                    .map(Path::toFile)
-                    .filter(BOOK_FILES::accept)
-                    .toList();
-        }
+        return bookImport.focus();
     }
 
     public void applyTheme(ThemePalette theme) {
