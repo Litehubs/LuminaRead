@@ -19,12 +19,12 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 
+import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
+
 /** Saves small, immutable reading checkpoints independently of the library catalog. */
 final class ProgressStore {
     private static final int VERSION_1 = 0x4c525001;
     private static final int VERSION = 0x4c525002;
-    private static final int FILE_SIZE_V1 = 41;
-    private static final int FILE_SIZE = FILE_SIZE_V1 + Integer.BYTES;
     private static final Pattern BOOK_ID = Pattern.compile("[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}");
     private static final Logger LOG = Logger.getLogger(ProgressStore.class.getName());
 
@@ -38,7 +38,7 @@ final class ProgressStore {
                 return thread;
             });
     private boolean scheduled;
-    private volatile boolean saveFailed;
+    private volatile IOException lastFailure;
 
     ProgressStore(Path dir) {
         this.dir = dir;
@@ -62,7 +62,7 @@ final class ProgressStore {
     }
 
     boolean hasError() {
-        return saveFailed;
+        return lastFailure != null;
     }
 
     /** Ordered behind previously queued writes. Call from a background task. */
@@ -70,7 +70,7 @@ final class ProgressStore {
         try {
             writer.submit(() -> {
                 writePending();
-                if (saveFailed) throw new UncheckedIOException(new IOException("Не удалось сохранить прогресс чтения"));
+                if (lastFailure != null) throw new UncheckedIOException("Не удалось сохранить прогресс чтения", lastFailure);
             }).get();
         } catch (ExecutionException ex) {
             if (ex.getCause() instanceof RuntimeException error) throw error;
@@ -94,27 +94,33 @@ final class ProgressStore {
             pending.clear();
             failed.clear();
         }
+        IOException failure = null;
         for (var entry : batch.entrySet()) {
             try {
-                Path file = dir.resolve(entry.getKey());
-                Position position = entry.getValue();
-                if (position == null) Files.deleteIfExists(file);
-                else AtomicFile.write(file, out -> position.write(new DataOutputStream(out)));
+                write(entry.getKey(), entry.getValue());
             } catch (IOException | SecurityException ex) {
-                if (entry.getValue() != null) failed.put(entry.getKey(), entry.getValue());
+                failed.put(entry.getKey(), entry.getValue());
+                failure = ex instanceof IOException io ? io : new IOException(ex);
                 LOG.log(Level.WARNING, "Не удалось записать прогресс чтения", ex);
             }
         }
-        saveFailed = !failed.isEmpty();
+        lastFailure = failure;
+    }
+
+    private void write(String id, Position position) throws IOException {
+        if (position == null && Files.notExists(dir, NOFOLLOW_LINKS)) return;
+        if (position != null) Files.createDirectories(dir);
+        if (!Files.isDirectory(dir, NOFOLLOW_LINKS)) throw new IOException("Недоступна папка прогресса: " + dir);
+        Path file = dir.resolve(id);
+        if (position == null) Files.deleteIfExists(file);
+        else AtomicFile.write(file, out -> position.write(new DataOutputStream(out)));
     }
 
     void restore(Book book) {
         if (!validId(book.getId())) return;
         Path file = dir.resolve(book.getId());
-        if (!Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
         try {
-            long size = Files.size(file);
-            if (size != FILE_SIZE && size != FILE_SIZE_V1) throw new IOException("Неизвестный формат");
+            if (!Files.isDirectory(dir, NOFOLLOW_LINKS) || !Files.isRegularFile(file, NOFOLLOW_LINKS)) return;
             read(book, file);
         } catch (IOException | SecurityException ex) {
             LOG.log(Level.WARNING, "Не удалось восстановить прогресс; используется состояние библиотеки", ex);
@@ -122,13 +128,13 @@ final class ProgressStore {
     }
 
     private void read(Book book, Path file) throws IOException {
-        try (var in = new DataInputStream(Files.newInputStream(file))) {
+        try (var in = new DataInputStream(Files.newInputStream(file, NOFOLLOW_LINKS))) {
             int version = in.readInt();
             if (version != VERSION && version != VERSION_1) throw new IOException("Неизвестный формат");
             var position = new Position(in.readInt(), in.readInt(), in.readInt(), in.readDouble(),
                     in.readBoolean(), in.readLong(), in.readLong(), version == VERSION_1 ? -1 : in.readInt());
-            if (!Double.isFinite(position.percent()) || position.seconds() < 0
-                    || in.read() != -1) throw new IOException("Повреждённая запись прогресса");
+            if (in.read() != -1) throw new IOException("Лишние данные в записи прогресса");
+            position.validate();
             position.apply(book);
         }
     }
@@ -146,6 +152,7 @@ final class ProgressStore {
         }
 
         void write(DataOutputStream out) throws IOException {
+            validate();
             out.writeInt(VERSION);
             out.writeInt(chapter);
             out.writeInt(page);
@@ -155,6 +162,14 @@ final class ProgressStore {
             out.writeLong(opened);
             out.writeLong(seconds);
             out.writeInt(textOffset);
+        }
+
+        private void validate() throws IOException {
+            if (chapter < 0 || page < 0 || scroll < 0 || opened < 0 || seconds < 0
+                    || textOffset < -1 || textOffset == Integer.MAX_VALUE
+                    || !Double.isFinite(percent) || percent < 0 || percent > 100) {
+                throw new IOException("Некорректная позиция чтения");
+            }
         }
 
         void apply(Book book) {
