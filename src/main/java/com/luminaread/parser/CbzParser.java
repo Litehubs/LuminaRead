@@ -22,6 +22,11 @@ public class CbzParser implements BookParser {
     private static final long MAX_EXPANDED_BYTES = 256L * 1024 * 1024;
     private static final int MAX_ENTRIES = 10000;
 
+    static boolean isPageImage(String name) {
+        return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png")
+                || name.endsWith(".gif") || name.endsWith(".webp") || name.endsWith(".avif");
+    }
+
     @Override
     public boolean supports(File file, String formatHint) {
         if (formatHint != null && "CBZ".equalsIgnoreCase(formatHint)) {
@@ -70,8 +75,7 @@ public class CbzParser implements BookParser {
             while ((entry = zis.getNextEntry()) != null) {
                 if (++entries > MAX_ENTRIES) throw new IOException("Слишком много файлов в CBZ");
                 String lower = entry.getName().toLowerCase(Locale.ROOT);
-                boolean image = !entry.isDirectory() && (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
-                        || lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".avif"));
+                boolean image = !entry.isDirectory() && isPageImage(lower);
                 ByteArrayOutputStream bos = image ? new ByteArrayOutputStream(32768) : null;
                 byte[] buf = new byte[8192];
                 int r;

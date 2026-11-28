@@ -2,7 +2,6 @@ package com.luminaread.ui;
 
 import com.luminaread.model.Book;
 import com.luminaread.service.BookImport;
-import com.luminaread.service.LibraryStorageService;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -39,9 +38,9 @@ final class BookImportDialog {
     private final Consumer<Book> open;
     private JDialog active;
 
-    BookImportDialog(Component owner, LibraryStorageService library, Runnable refresh, Consumer<Book> open) {
+    BookImportDialog(Component owner, BookImport books, Runnable refresh, Consumer<Book> open) {
         this.owner = owner;
-        this.books = new BookImport(library);
+        this.books = books;
         this.refresh = refresh;
         this.open = open;
     }

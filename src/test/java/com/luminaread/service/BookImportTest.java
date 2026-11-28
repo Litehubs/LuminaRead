@@ -1,5 +1,9 @@
 package com.luminaread.service;
 
+import com.luminaread.model.BookContent;
+import com.luminaread.model.Chapter;
+import com.luminaread.parser.BookParser;
+import com.luminaread.parser.BookParserRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -18,6 +22,34 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BookImportTest {
     @TempDir Path home;
+
+    @Test void registeredFormatIsAvailableInFolderAndFileSelection() throws Exception {
+        var registry = BookParserRegistry.getInstance();
+        Path folder = Files.createDirectory(home.resolve("source"));
+        File file = Files.writeString(folder.resolve("novel.custom"), "Custom book").toFile();
+        BookParser parser = new BookParser() {
+            @Override public String getSupportedFormat() { return "CUSTOM"; }
+
+            @Override public BookContent parse(File book) throws Exception {
+                String text = Files.readString(book.toPath());
+                var content = new BookContent();
+                content.setTitle(text);
+                content.addChapter(new Chapter(0, "Chapter", "<p>Book</p>", text));
+                return content;
+            }
+        };
+        registry.registerParser(parser);
+        try {
+            assertTrue(BookImport.supports(file));
+            var result = new BookImport(new LibraryStorageService(home))
+                    .fromFolder(folder, () -> false, ignored -> {});
+            assertEquals(List.of("Custom book"), result.books().stream().map(book -> book.getTitle()).toList());
+            assertEquals("CUSTOM", result.books().get(0).getFormat());
+        } finally {
+            registry.unregisterParser(parser);
+        }
+        assertFalse(BookImport.supports(file));
+    }
 
     @Test void folderImportsSupportedFormatsAtTheirOriginalPaths() throws Exception {
         Path folder = Files.createDirectory(home.resolve("source"));
@@ -61,15 +93,14 @@ class BookImportTest {
         File first = Files.writeString(home.resolve("first.txt"), "First book.").toFile();
         File second = Files.writeString(home.resolve("second.txt"), "Second book.").toFile();
         var stop = new AtomicBoolean();
-        var library = new LibraryStorageService(home) {
-            @Override public com.luminaread.model.Book importBookFile(File file, boolean copy) throws Exception {
-                var book = super.importBookFile(file, copy);
-                stop.set(true);
-                return book;
-            }
-        };
+        var library = new LibraryStorageService(home);
+        var batch = new BookImport((file, copy) -> {
+            var book = library.importBookFile(file, copy);
+            stop.set(true);
+            return book;
+        });
         var progress = new ArrayList<BookImport.Progress>();
-        var result = new BookImport(library).fromFiles(List.of(first, second), stop::get, progress::add);
+        var result = batch.fromFiles(List.of(first, second), stop::get, progress::add);
         assertTrue(result.stopped());
         assertEquals(List.of(new BookImport.Progress(0, 2, "first.txt")), progress);
         assertEquals(1, result.books().size());

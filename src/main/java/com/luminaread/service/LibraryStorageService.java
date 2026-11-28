@@ -9,7 +9,7 @@ import com.luminaread.model.Bookmark;
 import com.luminaread.model.Chapter;
 import com.luminaread.model.Highlight;
 import com.luminaread.model.ReaderSettings;
-import com.luminaread.parser.BookParserFactory;
+import com.luminaread.parser.BookParserRegistry;
 import com.luminaread.util.AtomicFile;
 import com.luminaread.util.HtmlSanitizer;
 import com.luminaread.util.WeightedCache;
@@ -119,9 +119,8 @@ public class LibraryStorageService {
     private record ParsedBook(BookFile file, String format, BookContent content) {
         static ParsedBook read(BookFile source) throws Exception {
             File file = source.path().toFile();
-            String format = BookParserFactory.detectFormatLabel(file);
-            BookContent content = BookParserFactory.parseBook(file);
-            return new ParsedBook(source, format, content);
+            var parsed = BookParserRegistry.getInstance().read(file);
+            return new ParsedBook(source, parsed.format(), parsed.content());
         }
 
         void checkSource() throws IOException {

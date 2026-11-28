@@ -1,6 +1,7 @@
 package com.luminaread.ui;
 
 import com.luminaread.model.Book;
+import com.luminaread.service.BookImport;
 import com.luminaread.service.LibraryStorageService;
 
 import javax.swing.BorderFactory;
@@ -56,7 +57,8 @@ public class LibraryPanel extends JPanel {
                         Runnable onNavigateToOnlineCatalog) {
         this.storageService = storageService;
         this.onOpenBook = onOpenBook;
-        this.bookImport = new BookImportDialog(this, storageService, this::refreshBooksGrid, onOpenBook);
+        this.bookImport = new BookImportDialog(this, new BookImport(storageService::importBookFile),
+                this::refreshBooksGrid, onOpenBook);
         this.onNavigateToOnlineCatalog = onNavigateToOnlineCatalog;
         this.currentTheme = ThemePalette.byId(storageService.getSettings().getThemeId());
 

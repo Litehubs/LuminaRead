@@ -53,19 +53,19 @@ public class TxtMarkdownParser implements BookParser {
     public BookContent parse(File file) throws Exception {
         byte[] bytes = BoundedInput.read(file.toPath(), 64 * 1024 * 1024);
         String rawText = CharsetDetector.decodeBytes(bytes);
-        String lowerName = file.getName().toLowerCase(Locale.ROOT);
+        String format = BookFormat.textFormat(bytes, BookFormat.fromName(file));
 
         BookContent content = new BookContent();
         content.setTitle(stripExt(file.getName()));
         content.setAuthor("Неизвестный автор");
 
-        if (lowerName.endsWith(".html") || lowerName.endsWith(".htm")) {
+        if ("HTML".equals(format)) {
             parseHtmlFile(rawText, content);
-        } else if (lowerName.endsWith(".rtf")) {
+        } else if ("RTF".equals(format)) {
             String stripped = decodeRtf(bytes, rawText);
             parsePlainOrMarkdown(stripped, false, content);
         } else {
-            boolean isMarkdown = lowerName.endsWith(".md") || lowerName.endsWith(".markdown");
+            boolean isMarkdown = "MD".equals(format);
             parsePlainOrMarkdown(rawText, isMarkdown, content);
         }
 

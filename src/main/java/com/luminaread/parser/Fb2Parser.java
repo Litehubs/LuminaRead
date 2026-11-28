@@ -5,13 +5,9 @@ import com.luminaread.model.BookContent;
 import com.luminaread.model.Chapter;
 import com.luminaread.util.CharsetDetector;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -22,14 +18,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.zip.GZIPInputStream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 public class Fb2Parser implements BookParser {
-
-    private static final int MAX_FB2_BYTES = 64 * 1024 * 1024;
-    private static final int MAX_ZIP_ENTRIES = 10000;
 
     private static final Pattern BINARY_PATTERN = Pattern.compile(
             "<binary\\b([^>]*)>(.*?)</binary>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
@@ -78,7 +68,7 @@ public class Fb2Parser implements BookParser {
                     + (file != null ? file.getAbsolutePath() : "null"));
         }
 
-        byte[] rawBytes = readActualFb2Bytes(file);
+        byte[] rawBytes = Fb2Input.read(file.toPath());
         String xml = CharsetDetector.decodeBytes(rawBytes);
 
         String bookTitle = file.getName().replaceFirst("[.][^.]+$", "");
@@ -295,52 +285,6 @@ public class Fb2Parser implements BookParser {
 
     private static String escapeSimple(String s) {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
-    }
-
-    private byte[] readActualFb2Bytes(File file) throws IOException {
-        byte[] fileBytes;
-        try (InputStream input = Files.newInputStream(file.toPath())) {
-            fileBytes = readBounded(input);
-        }
-
-        if (fileBytes.length > 2 && (fileBytes[0] & 0xFF) == 0x1F && (fileBytes[1] & 0xFF) == 0x8B) {
-            try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(fileBytes))) {
-                fileBytes = readBounded(gis);
-            }
-        }
-
-        if (fileBytes.length > 4 && fileBytes[0] == 'P' && fileBytes[1] == 'K') {
-            try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(fileBytes))) {
-                ZipEntry entry;
-                int entries = 0;
-                while ((entry = zis.getNextEntry()) != null) {
-                    if (++entries > MAX_ZIP_ENTRIES) throw new IOException("Слишком много файлов в архиве FB2");
-                    if (entry.isDirectory() && zis.read() != -1) {
-                        throw new IOException("Папка в архиве FB2 содержит данные");
-                    }
-                    if (!entry.isDirectory()) {
-                        return readBounded(zis);
-                    }
-                }
-            }
-            throw new IOException("В архиве FB2 не найдено файлов");
-        }
-        return fileBytes;
-    }
-
-    private static byte[] readBounded(InputStream input) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int count;
-        int total = 0;
-        while ((count = input.read(buffer)) != -1) {
-            if (count > MAX_FB2_BYTES - total) {
-                throw new IOException("Размер книги FB2 превышает допустимые 64 МиБ");
-            }
-            output.write(buffer, 0, count);
-            total += count;
-        }
-        return output.toByteArray();
     }
 
     private String stripScriptsAndStyles(String html) {

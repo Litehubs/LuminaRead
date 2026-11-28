@@ -1,6 +1,7 @@
 package com.luminaread.service;
 
 import com.luminaread.model.Book;
+import com.luminaread.parser.BookParserRegistry;
 
 import java.io.File;
 import java.io.IOException;
@@ -8,20 +9,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 public final class BookImport {
-    private static final Set<String> EXTENSIONS = Set.of(
-            "fb2", "fbz", "zip", "epub", "pdf", "txt", "md", "markdown", "html", "htm", "rtf", "cbz"
-    );
+    @FunctionalInterface
+    public interface Importer {
+        Book importFile(File file, boolean copy) throws Exception;
+    }
 
-    private final LibraryStorageService library;
+    private final Importer importer;
 
     public BookImport(LibraryStorageService library) {
-        this.library = library;
+        this(library::importBookFile);
+    }
+
+    public BookImport(Importer importer) {
+        this.importer = importer;
     }
 
     public record Progress(int index, int total, String name) {}
@@ -38,7 +42,9 @@ public final class BookImport {
     public static boolean supports(File file) {
         String name = file.getName();
         int dot = name.lastIndexOf('.');
-        return dot > 0 && EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
+        if (dot == 0) return false;
+        return (dot > 0 && name.substring(dot + 1).equalsIgnoreCase("zip"))
+                || BookParserRegistry.getInstance().findParser(file, null).isPresent();
     }
 
     public Result fromFolder(Path folder, BooleanSupplier stop, Consumer<Progress> progress)
@@ -68,7 +74,7 @@ public final class BookImport {
             File file = files.get(i);
             progress.accept(new Progress(i, files.size(), file.getName()));
             try {
-                books.add(library.importBookFile(file, copy));
+                books.add(importer.importFile(file, copy));
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 throw ex;

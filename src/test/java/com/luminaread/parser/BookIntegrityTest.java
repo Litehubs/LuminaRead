@@ -102,6 +102,89 @@ class BookIntegrityTest {
         assertThrows(java.io.IOException.class, () -> new EpubParser().parse(file.toFile()));
     }
 
+    @Test void htmlUnderATextFilenameKeepsItsTitleAndMarkup() throws Exception {
+        var file = Files.writeString(dir.resolve("chapter.txt"),
+                "<!doctype html><html><head><title>Night</title></head><body><p>A <b>chapter</b>.</p></body></html>");
+        var book = BookParserFactory.parseBook(file.toFile());
+        assertEquals("Night", book.getTitle());
+        assertEquals("A chapter.", book.getChapters().get(0).getPlainText().trim());
+    }
+
+    @Test void plainTextMayMentionFileSignatures() throws Exception {
+        for (String line : List.of("PK is a pair of initials.", "Use <html> to start a document.")) {
+            var file = Files.writeString(dir.resolve("notes.txt"), line);
+            assertEquals("TXT", BookParserFactory.detectFormatLabel(file.toFile()));
+            var content = BookParserFactory.parseBook(file.toFile());
+            assertTrue(content.getChapters().get(0).getPlainText().contains(line));
+        }
+    }
+
+    @Test void fb2ArchiveMayStartWithAnotherFile() throws Exception {
+        Path file = dir.resolve("book.fb2.zip");
+        try (var zip = new ZipOutputStream(Files.newOutputStream(file))) {
+            zip.putNextEntry(new ZipEntry("about.txt"));
+            zip.write("Publisher notes".getBytes(StandardCharsets.UTF_8));
+            zip.putNextEntry(new ZipEntry("books/story.FB2"));
+            zip.write("<FictionBook><body><section><p>A whole chapter.</p></section></body></FictionBook>"
+                    .getBytes(StandardCharsets.UTF_8));
+        }
+        var book = BookParserFactory.parseBook(file.toFile());
+        assertEquals("A whole chapter.", book.getChapters().get(0).getPlainText().trim());
+    }
+
+    @Test void recognizesComicPagesInGenericZip() throws Exception {
+        Path file = dir.resolve("comic.zip");
+        try (var zip = new ZipOutputStream(Files.newOutputStream(file))) {
+            zip.putNextEntry(new ZipEntry("page-1.gif"));
+            var page = new java.awt.image.BufferedImage(2, 2, java.awt.image.BufferedImage.TYPE_INT_RGB);
+            assertTrue(javax.imageio.ImageIO.write(page, "gif", zip));
+        }
+        var result = new BookParserRegistry().read(file.toFile());
+        assertEquals("CBZ", result.format());
+        assertEquals(1, result.content().getChapters().size());
+        assertTrue(result.content().getChapters().get(0).getHtmlContent().contains("<img"));
+    }
+
+    @Test void emptyFallbackRunsOnce() throws Exception {
+        var registry = new BookParserRegistry();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        BookParser empty = file -> {
+            calls.incrementAndGet();
+            return new BookContent();
+        };
+        registry.registerParser(0, empty);
+        registry.setFallbackParser(empty);
+        registry.parseBook(dir.resolve("test.unknown").toFile());
+        assertEquals(1, calls.get());
+    }
+
+    @Test void compressedBookWithLegacyFilenameStillOpens() throws Exception {
+        Path file = dir.resolve("legacy.fbz");
+        try (var gzip = new java.util.zip.GZIPOutputStream(Files.newOutputStream(file));
+             var zip = new ZipOutputStream(gzip)) {
+            zip.putNextEntry(new ZipEntry("story.xml"));
+            zip.write("<FictionBook><body><p>Legacy chapter.</p></body></FictionBook>".getBytes(StandardCharsets.UTF_8));
+        }
+        var book = BookParserFactory.parseBook(file.toFile());
+        assertTrue(book.getChapters().get(0).getPlainText().contains("Legacy chapter."));
+    }
+
+    @Test void readsHtmlAfterXmlPreambleAndComments() throws Exception {
+        var file = Files.writeString(dir.resolve("novel.dat"),
+                "<?xml version='1.0'?>\n<!-- opening -->\n<html><body><p>Chapter</p></body></html>",
+                StandardCharsets.UTF_16);
+        var result = new BookParserRegistry().read(file.toFile());
+        assertEquals("HTML", result.format());
+        assertEquals("Chapter", result.content().getChapters().get(0).getPlainText().trim());
+    }
+
+    @Test void detectsRtfUnderATextFilename() throws Exception {
+        var file = Files.writeString(dir.resolve("chapter.txt"), "{\\rtf1\\ansi Readable chapter.}");
+        var result = new BookParserRegistry().read(file.toFile());
+        assertEquals("RTF", result.format());
+        assertEquals("Readable chapter.", result.content().getChapters().get(0).getPlainText().trim());
+    }
+
     @Test void detectedFormatTakesPriorityOverMisleadingExtension() throws Exception {
         var registry = new BookParserRegistry();
         assertInstanceOf(EpubParser.class, registry.findParser(dir.resolve("book.fb2").toFile(), "EPUB").orElseThrow());
