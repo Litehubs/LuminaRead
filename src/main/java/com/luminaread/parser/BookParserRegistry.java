@@ -3,29 +3,20 @@ package com.luminaread.parser;
 import com.luminaread.model.BookContent;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
-/**
- * Extensible registry and dispatcher of {@link BookParser} instances.
- * Adheres to the Open/Closed Principle (OCP): new format parsers can be registered
- * dynamically at runtime without modifying existing parser or factory classes.
- */
+/** Selects a registered parser for the detected book format. */
 public class BookParserRegistry {
 
     private static final BookParserRegistry INSTANCE = new BookParserRegistry();
 
     private final List<BookParser> parsers = new CopyOnWriteArrayList<>();
-    private volatile BookParser fallbackParser;
+    private final BookParser textParser = new TxtMarkdownParser();
+    private volatile BookParser fallbackParser = textParser;
 
     public BookParserRegistry() {
         initDefaultParsers();
@@ -39,13 +30,11 @@ public class BookParserRegistry {
     }
 
     private void initDefaultParsers() {
-        TxtMarkdownParser txtParser = new TxtMarkdownParser();
         parsers.add(new Fb2Parser());
         parsers.add(new EpubParser());
         parsers.add(new PdfParser());
         parsers.add(new CbzParser());
-        parsers.add(txtParser);
-        this.fallbackParser = txtParser;
+        parsers.add(textParser);
     }
 
     /**
@@ -54,17 +43,10 @@ public class BookParserRegistry {
      *
      * @param parser the parser instance to register
      */
-    public void registerParser(BookParser parser) {
+    public synchronized void registerParser(BookParser parser) {
         Objects.requireNonNull(parser, "parser must not be null");
-        int insertIdx = 0;
-        for (int i = 0; i < parsers.size(); i++) {
-            if (parsers.get(i) instanceof TxtMarkdownParser) {
-                insertIdx = i;
-                break;
-            }
-            insertIdx = i + 1;
-        }
-        parsers.add(insertIdx, parser);
+        int index = parsers.indexOf(textParser);
+        parsers.add(index < 0 ? parsers.size() : index, parser);
     }
 
     /**
@@ -73,7 +55,7 @@ public class BookParserRegistry {
      * @param index insertion index
      * @param parser the parser instance to register
      */
-    public void registerParser(int index, BookParser parser) {
+    public synchronized void registerParser(int index, BookParser parser) {
         Objects.requireNonNull(parser, "parser must not be null");
         parsers.add(index, parser);
     }
@@ -84,7 +66,7 @@ public class BookParserRegistry {
      * @param parser the parser instance to remove
      * @return true if removed, false if not found
      */
-    public boolean unregisterParser(BookParser parser) {
+    public synchronized boolean unregisterParser(BookParser parser) {
         return parsers.remove(parser);
     }
 
@@ -96,7 +78,7 @@ public class BookParserRegistry {
     }
 
     /**
-     * Returns the fallback parser used when specialized parsing produces empty chapters or fails.
+     * Returns the fallback parser used when specialized parsing produces empty chapters.
      */
     public BookParser getFallbackParser() {
         return fallbackParser;
@@ -145,57 +127,13 @@ public class BookParserRegistry {
      * @return format label string (e.g. "PDF", "EPUB", "FB2", "FB2.ZIP", "CBZ", "HTML", "MD", "RTF", "TXT")
      */
     public String detectFormatLabel(File file) {
-        if (file != null && file.exists() && file.isFile() && file.length() >= 4) {
-            byte[] header = new byte[512];
-            int read = 0;
-            try (InputStream is = new FileInputStream(file)) {
-                read = is.read(header);
-            } catch (java.io.IOException ex) {
-                java.util.logging.Logger.getLogger(BookParserRegistry.class.getName())
-                        .log(java.util.logging.Level.FINE, "Не удалось прочитать сигнатуру файла", ex);
-            }
-
-            if (read >= 4) {
-                if (header[0] == '%' && header[1] == 'P' && header[2] == 'D' && header[3] == 'F') {
-                    return "PDF";
-                }
-
-                if (header[0] == 'P' && header[1] == 'K') {
-                    return inspectZipType(file);
-                }
-
-                String headStr = new String(header, 0, read, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
-                if (headStr.contains("<fictionbook")) {
-                    return "FB2";
-                }
-                if (headStr.contains("<!doctype html") || headStr.contains("<html")) {
-                    return "HTML";
-                }
-            }
-        }
-
-        String name = file != null ? file.getName().toLowerCase(Locale.ROOT) : "";
-        if (name.endsWith(".fb2.zip") || name.endsWith(".fbz")) return "FB2.ZIP";
-        if (name.endsWith(".fb2")) return "FB2";
-        if (name.endsWith(".epub")) return "EPUB";
-        if (name.endsWith(".pdf")) return "PDF";
-        if (name.endsWith(".cbz")) return "CBZ";
-        if (name.endsWith(".md") || name.endsWith(".markdown")) return "MD";
-        if (name.endsWith(".html") || name.endsWith(".htm")) return "HTML";
-        if (name.endsWith(".rtf")) return "RTF";
-        if (name.endsWith(".zip")) {
-            return inspectZipType(file);
-        }
-
-        // Query registered custom parsers to see if any matches this file
         if (file != null) {
+            String format = BookFormat.detect(file);
+            if (format != null) return format;
             for (BookParser parser : parsers) {
-                if (!(parser instanceof TxtMarkdownParser) && parser.supports(file, null)) {
-                    return parser.getSupportedFormat();
-                }
+                if (parser.supports(file, null)) return parser.getSupportedFormat();
             }
         }
-
         return "TXT";
     }
 
@@ -208,49 +146,22 @@ public class BookParserRegistry {
      * @throws Exception if parsing fails
      */
     public BookContent parseBook(File file) throws Exception {
-        String format = detectFormatLabel(file);
-        BookParser parser = findParser(file, format).orElse(fallbackParser);
-        if (parser == null) {
-            throw new IllegalArgumentException("No suitable parser found for: " + (file != null ? file.getName() : "null"));
-        }
-
-        BookContent content = parser.parse(file);
-
-        if (content.getChapters().isEmpty() && !(parser instanceof TxtMarkdownParser) && fallbackParser != null) {
-            BookContent fallback = fallbackParser.parse(file);
-            if (!fallback.getChapters().isEmpty()) {
-                return fallback;
-            }
-        }
-        return content;
+        return read(file).content();
     }
 
-    private static String inspectZipType(File file) {
-        try (ZipFile zf = new ZipFile(file)) {
-            boolean hasImages = false;
-            var entries = zf.entries();
-            while (entries.hasMoreElements()) {
-                ZipEntry entry = entries.nextElement();
-                String entryName = entry.getName().toLowerCase(Locale.ROOT);
-                if (entryName.endsWith(".opf") || entryName.equals("meta-inf/container.xml")
-                        || entryName.endsWith(".xhtml")) {
-                    return "EPUB";
-                }
-                if (entryName.endsWith(".fb2")) {
-                    return "FB2.ZIP";
-                }
-                if (entryName.endsWith(".jpg") || entryName.endsWith(".jpeg") || entryName.endsWith(".png")) {
-                    hasImages = true;
-                }
-            }
-            if (hasImages) return "CBZ";
-        } catch (Exception ex) {
-            java.util.logging.Logger.getLogger(BookParserRegistry.class.getName())
-                    .log(java.util.logging.Level.FINE, "Не удалось определить тип архива по содержимому", ex);
+    public record Parsed(String format, BookContent content) {}
+
+    public Parsed read(File file) throws Exception {
+        String format = detectFormatLabel(file);
+        BookParser fallback = fallbackParser;
+        BookParser parser = findParser(file, format).orElse(fallback);
+        if (parser == null) throw new IllegalArgumentException("Нет парсера для формата " + format);
+
+        BookContent content = parser.parse(file);
+        if (content.getChapters().isEmpty() && fallback != null && parser != fallback) {
+            BookContent alternative = fallback.parse(file);
+            if (!alternative.getChapters().isEmpty()) content = alternative;
         }
-        String name = file != null ? file.getName().toLowerCase(Locale.ROOT) : "";
-        if (name.endsWith(".epub")) return "EPUB";
-        if (name.endsWith(".cbz")) return "CBZ";
-        return "FB2.ZIP";
+        return new Parsed(format, content);
     }
 }
